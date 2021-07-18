@@ -37,7 +37,7 @@ public OnPluginStart()
 {
 	//CreateConVar(const char[] name, const char[] defaultValue, const char[] description, int flags, bool hasMin, float min, bool hasMax, float max)
 	
-	startingMoney				= CreateConVar("starting_money",				"0",	"Amount of money players start out with")
+	startingMoney				= CreateConVar("starting_money",				"1000",	"Amount of money players start out with")
 	
 	//AWARD CONDITIONS
 	conAllowPerRoundAwards		= CreateConVar("condition_allow_per_round_awards",	"0",	"Can applicable awards be given at the end of a round (0 = Only Map End, 1 = Each Round [where applicable])")
