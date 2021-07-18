@@ -59,7 +59,7 @@ public OnPluginStart()
 	awardKilledWitch			= CreateConVar("award_killed_witch",			"25",	"Money awarded for killing a witch (without her running away/incapping a survivor) (0 = No Award)")
 	awardWipedSurvivors			= CreateConVar("award_wiped_survivors",			"300",	"Money awarded for killing all the survivors (0 = No Award)")
 	awardSurvivorIncapped		= CreateConVar("award_survivor_incapped",		"10",	"Money awarded each time a survivor is incapped (0 = No Award)")
-	awardSurvivorIncapped		= CreateConVar("award_survivor_incapped",		"10",	"Money awarded each time an infected ability lands (0 = No Award)")
+	awardLandedAbility			= CreateConVar("award_ability_landed",			"10",	"Money awarded each time an infected ability lands (0 = No Award)")
 	awardHealthGreen			= CreateConVar("award_health_green",			"100",	"Money awarded for each survivor that completes the map with green health (0 = No Award)")
 	awardHealthYellow			= CreateConVar("award_health_yellow",			"60",	"Money awarded for each survivor that completes the map with yellow health (0 = No Award)")
 	awardHealthRed				= CreateConVar("award_health_red",				"30",	"Money awarded for each survivor that completes the map with red health (0 = No Award)")
@@ -117,6 +117,7 @@ public OnPluginStart()
 
 /*
 NOTES:
+
 
 buy menu:
 T1s
