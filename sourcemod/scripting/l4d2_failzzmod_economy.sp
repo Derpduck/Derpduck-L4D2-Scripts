@@ -1,5 +1,5 @@
 #include <sourcemod>
-//#include <sdktools>
+#include <sdktools>
 #include <sdkhooks>
 #include <colors>
 #include <left4dhooks>
@@ -13,19 +13,14 @@ public Plugin:myinfo =
 	url = "https://github.com/Derpduck/Derpduck-L4D2-Scripts"
 }
 
+#define NULL_VELOCITY view_as<float>({0.0, 0.0, 0.0})
+
+//TRACK STEAM IDs
 #define AUTH_ADT_LENGTH (ByteCountToCells(64))
 ArrayList g_steamIDs
 ArrayList g_playerMoney
 
-enum PlayerTeam
-{
-    PlayerTeam_None = 0,
-    PlayerTeam_Spectator,
-    PlayerTeam_Survivor,
-    PlayerTeam_Infected
-}
-
-//Menu Constants
+//MENU DEFINES
 #define CHOICE_SHOTGUNS "#choice_shotguns"
 #define CHOICE_AUTOMATIC "#choice_automatic"
 #define CHOICE_SNIPERS "#choice_snipers"
@@ -33,10 +28,8 @@ enum PlayerTeam
 #define CHOICE_SECONDARY "#choice_secondary"
 #define CHOICE_THROWABLE "#choice_throwable"
 #define CHOICE_HEALING "#choice_healing"
-/*
 #define CHOICE_UPGRADES "#choice_upgrades"
-*/
-
+//Items
 #define BUY_SHOTGUN_PUMP "#buy_shotgun_pump"
 #define BUY_SHOTGUN_CHROME "#buy_shotgun_chrome"
 #define BUY_SHOTGUN_AUTO "#buy_shotgun_auto"
@@ -64,10 +57,9 @@ enum PlayerTeam
 #define BUY_ADRENALINE "#buy_adrenaline"
 #define BUY_MEDKIT "#buy_medkit"
 #define BUY_DEFIB "#buy_defib"
-
+//Melee menus
 #define CHOICE_MELEE_BLUNT "#buy_melee_blunt"
 #define CHOICE_MELEE_SHARP "#buy_melee_sharp"
-
 #define BUY_BASEBALLBAT "#buy_baseballbat"
 #define BUY_CRICKETBAT "#buy_cricketbat"
 #define BUY_GUITAR "#buy_guitar"
@@ -82,124 +74,160 @@ enum PlayerTeam
 #define BUY_MACHETE "#buy_machete"
 #define BUY_PITCHFORK "#buy_pitchfork"
 
-bool canBuy = false
+//Variables
+bool g_bCanBuy = false
+bool g_bSaferoomLocked = false
+int g_iValidMeleeCount = 0
+new String:g_sValidMelees[16][32]
 
-ConVar startingMoney, maximumMoney;
+/*
+	CONVARS
+*/
+//BUY TIME
+ConVar	initialBuyTime, extendedBuyTime;
+
+//MONEY
+ConVar	startingMoney, maximumMoney;
 
 /*
 //AWARD CONDITIONS
-ConVar conAllowPerRoundAwards, conPersonalSurvivorIncap, conPersonalSurvivorKilled, conPersonalAbility, conPersonalHealth, conPersonalDistance, conPersonalPenaltyIncap, conPersonalPenaltyDeath;
+ConVar	personalWitchKill,
+		personalSurvivorIncap, personalSurvivorKilled,
+		personalAbility, personalSkilledAbility,
+		personalHealth, personalDistance,
+		personalPenaltyIncap, personalPenaltyDeath;
 
 //AWARD AMOUNTS
-ConVar awardRoundEnd, awardMapEnd, awardWonMap, awardLostMap, awardConsecutiveLoss, awardExtraConsecutiveLoss, awardKilledTank, awardKilledWitch, awardWipedSurvivors, awardSurvivorIncapped, awardSurvivorKilled, awardAbilityLanded, awardCapDuration, awardHealthGreen, awardHealthYellow, awardHealthRed, awardHealthTempOnly, awardDistanceBonus;
+ConVar	awardRoundEnd, awardMapEnd, awardWonMap, awardLostMap, awardConsecutiveLoss, awardExtraConsecutiveLoss,
+		awardKilledTank, awardKilledWitch,
+		awardWipedSurvivors, awardSurvivorIncapped, awardSurvivorKilled,
+		awardAbilityLanded, awardSkilledAbilityLanded, awardCapDuration,
+		awardHealthGreen, awardHealthYellow, awardHealthRed, awardHealthTempOnly, awardDistanceBonus,
+		awardTier1Bonus;
 
 //PENALTY AMOUNTS
-ConVar penaltyIncapped, penaltyDeath;
+ConVar	penaltyIncapped, penaltyDeath;
 */
 
 //ITEM PRICES
-ConVar priceShotgunPump, priceShotgunChrome, priceUzi, priceUziSilenced, priceUziMP5, priceRifleM16, priceRifleAK47, priceRifleDesert, priceRifleSG552, priceShotgunAuto, priceShotgunSpas, priceSniperHunting, priceSniperMilitary, priceSniperScout, priceSniperAWP;
-ConVar priceM60, priceGrenadeLauncher, priceChainsaw;
-ConVar pricePistol, priceMagnum, priceMeleeBlunt, priceMeleeSharp;
-ConVar priceMolotov, pricePipebomb, priceBilebomb;
-ConVar pricePainPills, priceAdrenaline, priceMedkit, priceDefibrillator;
+ConVar	priceShotgunPump, priceShotgunChrome,
+		priceUzi, priceUziSilenced, priceUziMP5,
+		priceRifleM16, priceRifleAK47, priceRifleDesert, priceRifleSG552,
+		priceShotgunAuto, priceShotgunSpas,
+		priceSniperHunting, priceSniperMilitary, priceSniperScout, priceSniperAWP,
+		priceM60, priceGrenadeLauncher, priceChainsaw,
+		pricePistol, priceMagnum,
+		priceMeleeBlunt, priceMeleeSharp,
+		priceMolotov, pricePipebomb, priceBilebomb,
+		pricePainPills, priceAdrenaline, priceMedkit, priceDefibrillator;
 /*
-ConVar priceLaser, priceFireAmmo, priceExplosiveAmmo;
-ConVar priceGnome, priceCola;
+ConVar	priceLaser, priceFireAmmo, priceExplosiveAmmo;
+ConVar	priceGnome, priceCola;
 */
 
 public OnPluginStart()
 {
+	//HOOKS
 	HookEvent("round_start", EventHook:RoundStartEvent, EventHookMode_PostNoCopy)
 	
-	LoadTranslations("economy_menu.phrases")
+	//CLIENT COMMANDS
 	RegConsoleCmd("buy", Buy_Menu)
 	
-	//CreateConVar(const char[] name, const char[] defaultValue, const char[] description, int flags, bool hasMin, float min, bool hasMax, float max)
+	//@@@ = placeholder
 	
-	startingMoney				= CreateConVar("starting_money",				"1000",		"Amount of money players start out with")
-	maximumMoney				= CreateConVar("maximum_money",					"16000",	"Maximum amount of money players are allowed to have")
+	//BUY TIME
+	initialBuyTime				= CreateConVar("initial_buy_time",				"45",		"Amount of time to buy before the round starts and players are allowed out of the saferoom")
+	extendedBuyTime				= CreateConVar("extended_buy_time",				"15",		"Amount of time allowed to buy items after the round starts")
 	
-	//AWARD CONDITIONS
+	//MONEY
+	startingMoney				= CreateConVar("starting_money",				"1800",		"Amount of money players start out with upon joining for the first time")
+	maximumMoney				= CreateConVar("maximum_money",					"16000",	"Maximum amount of money players are allowed to have") //Placeholder value
+	
 	/*
-	conAllowPerRoundAwards		= CreateConVar("condition_allow_per_round_awards",	"0",	"Can applicable awards be given at the end of a round (0 = Only on map end, 1 = Each round, where applicable)")
-	conPersonalSurvivorIncap	= CreateConVar("condition_personal_survivor_incap",	"0",	"Is survivor incapped bonus money awarded to the entire team or individually (0 = Entire Team, 1 = Individually)")
-	conPersonalSurvivorKilled	= CreateConVar("condition_personal_survivor_kill",	"0",	"Is survivor kill bonus money awarded to the entire team or individually (0 = Entire Team, 1 = Individually)")
-	conPersonalAbility			= CreateConVar("condition_personal_ability",		"0",	"Is ability landing bonus money awarded to the entire team or individually (0 = Entire Team, 1 = Individually)")
-	conPersonalHealth			= CreateConVar("condition_personal_health",			"0",	"Is health bonus money awarded to the entire team or individually (0 = Entire Team, 1 = Individually)")
-	conPersonalDistance			= CreateConVar("condition_personal_distance",		"0",	"Is distance bonus money awarded to the entire team or individually (0 = Entire Team, 1 = Individually)")
-	conPersonalPenaltyIncap		= CreateConVar("condition_personal_penalty_incap",	"1",	"Is incap penalty money taken from the entire team or individually (0 = Entire Team, 1 = Individually)")
-	conPersonalPenaltyDeath		= CreateConVar("condition_personal_penalty_death",	"1",	"Is death penalty money taken from the entire team or individually (0 = Entire Team, 1 = Individually)")
+	//AWARD CONDITIONS
+	personalWitchKill			= CreateConVar("personal_witch_kill",			"0",		"Is witch killp bonus money awarded to the entire team or individually (0 = Team, 1 = Personal)")
+	personalSurvivorIncap		= CreateConVar("personal_survivor_incap",		"0",		"Is survivor incap bonus money awarded to the entire team or individually (0 = Team, 1 = Personal)")
+	personalSurvivorKilled		= CreateConVar("personal_survivor_kill",		"0",		"Is survivor kill bonus money awarded to the entire team or individually (0 = Team, 1 = Personal)")
+	personalAbility				= CreateConVar("personal_ability",				"1",		"Is ability landing (and cap duration) bonus money awarded to the entire team or individually (0 = Team, 1 = Personal)")
+	personalSkilledAbility		= CreateConVar("personal_skilled_ability",		"1",		"Is skilled ability landing bonus money awarded to the entire team or individually (0 = Team, 1 = Personal)")
+	personalHealth				= CreateConVar("personal_health",				"0",		"Is health bonus money awarded to the entire team or individually (0 = Team, 1 = Personal)")
+	personalDistance			= CreateConVar("personal_distance",				"0",		"Is distance bonus money awarded to the entire team or individually (0 = Team, 1 = Personal)")
+	personalPenaltyIncap		= CreateConVar("personal_penalty_incap",		"1",		"Is incap penalty money taken from the entire team or individually (0 = Team, 1 = Personal)")
+	personalPenaltyDeath		= CreateConVar("personal_penalty_death",		"1",		"Is death penalty money taken from the entire team or individually (0 = Team, 1 = Personal)")
 	
 	//AWARD AMOUNTS
-	awardRoundEnd				= CreateConVar("award_round_end",				"0",	"Money awarded on (half) round end (0 = No Award)")
-	awardMapEnd					= CreateConVar("award_map_end",					"500",	"Money awarded on (full) map end (0 = No Award)")
-	awardWonMap					= CreateConVar("award_won_map",					"500",	"Money awarded for winning a map (0 = No Award)")
-	awardLostMap				= CreateConVar("award_lost_map",				"0",	"Money awarded for losing a map (0 = No Award)")
-	awardConsecutiveLoss		= CreateConVar("award_consecutive_loss",		"350",	"Money awarded for losing 2 maps consecutively (0 = No Award)")
-	awardExtraConsecutiveLoss	= CreateConVar("award_extra_consecutive_loss",	"700",	"Money awarded for losing more than 2 maps consecutively (0 = No Award)")
-	awardKilledTank				= CreateConVar("award_killed_tank",				"250",	"Money awarded for killing a tank (0 = No Award)")
-	awardKilledWitch			= CreateConVar("award_killed_witch",			"25",	"Money awarded for killing a witch (without her running away/incapping a survivor) (0 = No Award)")
-	awardWipedSurvivors			= CreateConVar("award_wiped_survivors",			"300",	"Money awarded for killing all the survivors (0 = No Award)")
-	awardSurvivorIncapped		= CreateConVar("award_survivor_incapped",		"10",	"Money awarded each time a survivor is incapped (0 = No Award)")
-	awardSurvivorKilled			= CreateConVar("award_survivor_incapped",		"50",	"Money awarded each time a survivor is killed (0 = No Award)")
-	awardAbilityLanded			= CreateConVar("award_ability_landed",			"15",	"Money awarded each time an infected ability lands (0 = No Award)")
-	awardCapDuration			= CreateConVar("award_cap_duration",			"5",	"Money awarded for every 3 seconds a survivor is pinned (0 = No Award)")
-	awardHealthGreen			= CreateConVar("award_health_green",			"100",	"Money awarded for each survivor that completes the map with green health (0 = No Award)")
-	awardHealthYellow			= CreateConVar("award_health_yellow",			"60",	"Money awarded for each survivor that completes the map with yellow health (0 = No Award)")
-	awardHealthRed				= CreateConVar("award_health_red",				"30",	"Money awarded for each survivor that completes the map with red health (0 = No Award)")
-	awardHealthTempOnly			= CreateConVar("award_health_temp_only",		"20",	"Money awarded for each survivor that completes the map with only temporary health (0 = No Award)")
-	awardDistanceBonus			= CreateConVar("award_distance_bonus",			"1",	"Money awarded for distance points gained by survivors (multiplier of distance value) (0 = No Award)")
+	awardRoundEnd				= CreateConVar("award_round_end",				"0",		"Money awarded on (half) round end (0 = No Award) [Team]")
+	awardMapEnd					= CreateConVar("award_map_end",					"1800",		"Money awarded on (full) map end (0 = No Award) [Team]")
+	awardWonMap					= CreateConVar("award_won_map",					"1200",		"Money awarded for winning a map (0 = No Award) [Team]")
+	awardLostMap				= CreateConVar("award_lost_map",				"900",		"Money awarded for losing a map (0 = No Award) [Team]")
+	awardConsecutiveLoss		= CreateConVar("award_consecutive_loss",		"1000",		"Money awarded for losing 2 maps consecutively (0 = No Award) [Team]")
+	awardExtraConsecutiveLoss	= CreateConVar("award_extra_consecutive_loss",	"1100",		"Money awarded for losing more than 2 maps consecutively (0 = No Award) [Team]")
+	awardKilledTank				= CreateConVar("award_killed_tank",				"@@@ 250",	"Money awarded for killing a tank (0 = No Award) [Team]")
+	awardKilledWitch			= CreateConVar("award_killed_witch",			"@@@ 25",	"Money awarded for killing a witch (without her running away/incapping a survivor) (0 = No Award) [Team (default) / Personal]")
+	awardWipedSurvivors			= CreateConVar("award_wiped_survivors",			"@@@ 300",	"Money awarded for killing all the survivors (0 = No Award) [Team]")
+	awardSurvivorIncapped		= CreateConVar("award_survivor_incapped",		"@@@ 10",	"Money awarded each time a survivor is incapped (0 = No Award) [Team (default) / Personal]")
+	awardSurvivorKilled			= CreateConVar("award_survivor_killed",			"@@@ 50",	"Money awarded each time a survivor is killed (0 = No Award) [Team (default) / Personal]")
+	awardAbilityLanded			= CreateConVar("award_ability_landed",			"@@@ 15",	"Money awarded for landing an infected ability (excludes spitter) (0 = No Award) [Team / Personal (default)]")
+	awardSkilledAbilityLanded	= CreateConVar("award_skill_ability_landed",	"@@@ 15",	"Money awarded for landing infected abilities skillfully (e.g. high pounces) (0 = No Award) [Team / Personal (default)]")
+	awardCapDuration			= CreateConVar("award_cap_duration",			"@@@ 5",	"Money awarded for every second a survivor is pinned (0 = No Award) [Team / Personal (default)]")
+	awardHealthGreen			= CreateConVar("award_health_green",			"@@@ 100",	"Money awarded for each survivor that completes the map with green health (0 = No Award) [Team (default) / Personal]")
+	awardHealthYellow			= CreateConVar("award_health_yellow",			"@@@ 60",	"Money awarded for each survivor that completes the map with yellow health (0 = No Award) [Team (default) / Personal]")
+	awardHealthRed				= CreateConVar("award_health_red",				"@@@ 30",	"Money awarded for each survivor that completes the map with red health (0 = No Award) [Team (default) / Personal]")
+	awardHealthTempOnly			= CreateConVar("award_health_temp_only",		"@@@ 20",	"Money awarded for each survivor that completes the map with only temporary health (0 = No Award) [Team (default) / Personal]")
+	awardDistanceBonus			= CreateConVar("award_distance_bonus",			"@@@ 1",	"Multiplier of distance points for money awarded (0 = No Award) [Team (default) / Personal]")
+	awardTier1Bonus				= CreateConVar("award_tier1_bonus",				"@@@ 200",	"Money awarded for each tier 1 weapon the survivors have when reaching the saferoom (0 = No Award) [Team / Personal (default)]")
 	
 	//PENALTY AMOUNTS
-	penaltyIncapped				= CreateConVar("penalty_incapped",				"0",	"Money lost for being incapped (0 = No Penalty)")
-	penaltyDeath				= CreateConVar("penalty_death",					"0",	"Money lost for being killed as a survivor (0 = No Penalty)")
+	penaltyIncapped				= CreateConVar("penalty_incapped",				"@@@ 25",	"Money lost for being incapped (0 = No Penalty) [Team / Personal (default)]")
+	penaltyDeath				= CreateConVar("penalty_death",					"@@@ 0",	"Money lost for being killed as a survivor (0 = No Penalty) [Team / Personal (default)]")
 	*/
 	
 	//ITEM PRICES
-	//T1s
-	priceShotgunPump			= CreateConVar("price_shotgun_pump",			"500",	"Cost of weapon: pumpshotgun")
-	priceShotgunChrome			= CreateConVar("price_shotgun_chrome",			"500",	"Cost of weapon: shotgun_chrome")
-	priceUzi					= CreateConVar("price_uzi",						"500",	"Cost of weapon: smg")
-	priceUziSilenced			= CreateConVar("price_uzi_silenced",			"500",	"Cost of weapon: smg_silenced")
-	priceUziMP5					= CreateConVar("price_uzi_mp5",					"500",	"Cost of weapon: smg_mp5")
-	//T2s
-	priceRifleM16				= CreateConVar("price_rifle_m16",				"1000",	"Cost of weapon: rifle")
-	priceRifleAK47				= CreateConVar("price_rifle_ak47",				"1000",	"Cost of weapon: rifle_ak47")
-	priceRifleDesert			= CreateConVar("price_rifle_desert",			"1000",	"Cost of weapon: rifle_desert")
-	priceRifleSG552				= CreateConVar("price_rifle_sg552",				"1000",	"Cost of weapon: rifle_sg552")
-	priceShotgunAuto			= CreateConVar("price_shotgun_auto",			"1000",	"Cost of weapon: autoshotgun")
-	priceShotgunSpas			= CreateConVar("price_shotgun_spas",			"1000",	"Cost of weapon: shotgun_spas")
-	priceSniperHunting			= CreateConVar("price_sniper_hunting",			"1000",	"Cost of weapon: hunting_rifle")
-	priceSniperMilitary			= CreateConVar("price_sniper_military",			"1000",	"Cost of weapon: sniper_military")
-	priceSniperScout			= CreateConVar("price_sniper_scout",			"1000",	"Cost of weapon: sniper_scout")
-	priceSniperAWP				= CreateConVar("price_sniper_awp",				"1000",	"Cost of weapon: sniper_awp")
-	//T3s
-	priceM60					= CreateConVar("price_m60",						"1500",	"Cost of weapon: rifle_m60")
-	priceGrenadeLauncher		= CreateConVar("price_grenade_launcher",		"1500",	"Cost of weapon: grenade_launcher")
-	priceChainsaw				= CreateConVar("price_chainsaw",				"1500",	"Cost of weapon: chainsaw")
+	//Shotguns
+	priceShotgunPump			= CreateConVar("price_shotgun_pump",			"1050",		"Cost of weapon: pumpshotgun")
+	priceShotgunChrome			= CreateConVar("price_shotgun_chrome",			"1100",		"Cost of weapon: shotgun_chrome")
+	priceShotgunAuto			= CreateConVar("price_shotgun_auto",			"2200",		"Cost of weapon: autoshotgun")
+	priceShotgunSpas			= CreateConVar("price_shotgun_spas",			"2300",		"Cost of weapon: shotgun_spas")
+	//Uzis
+	priceUzi					= CreateConVar("price_uzi",						"1050",		"Cost of weapon: smg")
+	priceUziSilenced			= CreateConVar("price_uzi_silenced",			"1250",		"Cost of weapon: smg_silenced")
+	priceUziMP5					= CreateConVar("price_uzi_mp5",					"1650",		"Cost of weapon: smg_mp5")
+	//Rifles
+	priceRifleM16				= CreateConVar("price_rifle_m16",				"2500",		"Cost of weapon: rifle")
+	priceRifleAK47				= CreateConVar("price_rifle_ak47",				"2700",		"Cost of weapon: rifle_ak47")
+	priceRifleDesert			= CreateConVar("price_rifle_desert",			"1800",		"Cost of weapon: rifle_desert")
+	priceRifleSG552				= CreateConVar("price_rifle_sg552",				"3000",		"Cost of weapon: rifle_sg552")
+	//Snipers
+	priceSniperHunting			= CreateConVar("price_sniper_hunting",			"4500",		"Cost of weapon: hunting_rifle")
+	priceSniperMilitary			= CreateConVar("price_sniper_military",			"4750",		"Cost of weapon: sniper_military")
+	priceSniperScout			= CreateConVar("price_sniper_scout",			"1700",		"Cost of weapon: sniper_scout")
+	priceSniperAWP				= CreateConVar("price_sniper_awp",				"4250",		"Cost of weapon: sniper_awp")
+	//Heavy Weaopns
+	priceM60					= CreateConVar("price_m60",						"4500",		"Cost of weapon: rifle_m60") //Placeholder value
+	priceGrenadeLauncher		= CreateConVar("price_grenade_launcher",		"8000",		"Cost of weapon: grenade_launcher") //Placeholder value
+	priceChainsaw				= CreateConVar("price_chainsaw",				"5000",		"Cost of weapon: chainsaw") //Placeholder value
 	//Secondaries
-	pricePistol					= CreateConVar("price_pistol",					"100",	"Cost of weapon: pistol (per pistol)")
-	priceMagnum					= CreateConVar("price_pistol_magnum",			"500",	"Cost of weapon: pistol_magnum")
-	priceMeleeBlunt				= CreateConVar("price_melee_blunt",				"500",	"Cost of weapon(s): baseball_bat, cricket_bat, electric_guitar, frying_pan, golfclub, shovel, tonfa")
-	priceMeleeSharp				= CreateConVar("price_melee_sharp",				"600",	"Cost of weapon(s): crowbar, fireaxe, katana, knife, machete, pitchfork")
+	pricePistol					= CreateConVar("price_pistol",					"400",		"Cost of weapon: pistol (per pistol)")
+	priceMagnum					= CreateConVar("price_pistol_magnum",			"700",		"Cost of weapon: pistol_magnum")
+	priceMeleeBlunt				= CreateConVar("price_melee_blunt",				"500",		"Cost of weapon(s): baseball_bat, cricket_bat, electric_guitar, frying_pan, golfclub, shovel, tonfa")
+	priceMeleeSharp				= CreateConVar("price_melee_sharp",				"700",		"Cost of weapon(s): crowbar, fireaxe, katana, knife, machete, pitchfork")
 	//Throwables
-	priceMolotov				= CreateConVar("price_molotov",					"700",	"Cost of weapon: molotov")
-	pricePipebomb				= CreateConVar("price_pipe_bomb",				"700",	"Cost of weapon: pipe_bomb")
-	priceBilebomb				= CreateConVar("price_bile_bomb",				"800",	"Cost of weapon: vomitjar")
+	priceMolotov				= CreateConVar("price_molotov",					"200",		"Cost of weapon: molotov")
+	pricePipebomb				= CreateConVar("price_pipe_bomb",				"300",		"Cost of weapon: pipe_bomb")
+	priceBilebomb				= CreateConVar("price_bile_bomb",				"600",		"Cost of weapon: vomitjar")
 	//Healing Items
-	pricePainPills				= CreateConVar("price_pain_pills",				"400",	"Cost of weapon: pain_pills")
-	priceAdrenaline				= CreateConVar("price_adrenaline",				"600",	"Cost of weapon: adrenaline")
-	priceMedkit					= CreateConVar("price_medkit",					"1200",	"Cost of weapon: first_aid_kit")
-	priceDefibrillator			= CreateConVar("price_defibrillator",			"3000",	"Cost of weapon: defibrillator")
+	pricePainPills				= CreateConVar("price_pain_pills",				"400",		"Cost of weapon: pain_pills")
+	priceAdrenaline				= CreateConVar("price_adrenaline",				"650",		"Cost of weapon: adrenaline")
+	priceMedkit					= CreateConVar("price_medkit",					"1200",		"Cost of weapon: first_aid_kit")
+	priceDefibrillator			= CreateConVar("price_defibrillator",			"1550",		"Cost of weapon: defibrillator")
 	/*
 	//Upgrades
-	priceLaser					= CreateConVar("price_laser",					"1500",	"Cost of upgrade: laser sights")
-	priceFireAmmo				= CreateConVar("price_fire_ammo",				"2000",	"Cost of upgrade: upgradepack_incendiary")
-	priceExplosiveAmmo			= CreateConVar("price_explosive_ammo",			"5000",	"Cost of upgrade: upgradepack_explosive")
+	priceLaser					= CreateConVar("price_laser",					"@@@ 2500",	"Cost of upgrade: laser sights")
+	priceFireAmmo				= CreateConVar("price_fire_ammo",				"@@@ 3000",	"Cost of upgrade: upgradepack_incendiary")
+	priceExplosiveAmmo			= CreateConVar("price_explosive_ammo",			"@@@ 5000",	"Cost of upgrade: upgradepack_explosive")
 	//Fun
-	priceGnome					= CreateConVar("price_gnome",					"50",	"Cost of item: gnome")
-	priceCola					= CreateConVar("price_cola",					"50",	"Cost of item: cola_bottles")
+	priceGnome					= CreateConVar("price_gnome",					"50",		"Cost of item: gnome")
+	priceCola					= CreateConVar("price_cola",					"50",		"Cost of item: cola_bottles")
 	*/
 	
 	//Initalize money tracking
@@ -209,6 +237,18 @@ public OnPluginStart()
 	g_playerMoney.Clear()
 	
 	CreateTimer(10.0, test)
+}
+
+//Return valid melee's for current campaign
+static GetValidMelees()
+{
+	new tableValidMelees = FindStringTable("MeleeWeapons")
+	g_iValidMeleeCount = GetStringTableNumStrings(tableValidMelees)
+	
+	for (int i = 0; i < g_iValidMeleeCount; i++)
+	{
+		ReadStringTable(tableValidMelees, i, g_sValidMelees[i], 32)
+	}
 }
 
 static Action:test(Handle timer)
@@ -221,11 +261,13 @@ static Action:test(Handle timer)
 /*
 	INITIALIZE CLIENTS
 */
+//When client loads in begin tracking money
 public OnClientPutInServer(client)
 {
 	AddClientToList(client)
 }
 
+//Add client to money tracking arrays
 static AddClientToList(client)
 {
 	//Valid client
@@ -242,12 +284,23 @@ static AddClientToList(client)
 			new startMoney = GetConVarInt(startingMoney)
 			PushArrayString(g_steamIDs, steamID)
 			PushArrayCell(g_playerMoney, startMoney)
-			
-			PrintToChatAll("Added client: %s at index: %i with money: %i", steamID, index, startMoney)
+		}
+		
+		//Show menu if client is survivor
+		if (GetClientTeam(client) == 2)
+		{
+			if (g_bCanBuy)
+			{
+				if (GetClientMenu(client) != MenuSource_None)
+				{
+					CreateTimer(1.0, BuyMenuAutoShow, client)
+				}
+			}
 		}
 	}
 }
 
+//Remove clients from money tracking list
 static RemoveClientFromList(client)
 {
 	//Valid client
@@ -263,38 +316,111 @@ static RemoveClientFromList(client)
 			//Remove them from arrays
 			RemoveFromArray(g_steamIDs, index)
 			RemoveFromArray(g_playerMoney, index)
-			
-			PrintToChatAll("Removed client: %s at index: %i", steamID, index)
 		}
 	}
 }
 
-static RoundStartEvent(Handle:event, const String:name[], bool:dontBroadcast)
+//Show menu to joining clients
+static Action:BuyMenuAutoShow(Handle timer, client)
 {
-	CreateTimer(10.0, RoundStartEvent_Delay)
+	OpenBuyMenu(client)
 }
 
+//When round starts keep survivors in the saferoom and initialize  buying system
+static RoundStartEvent(Handle:event, const String:name[], bool:dontBroadcast)
+{
+	g_bCanBuy = false
+	GetValidMelees()
+	CreateTimer(10.0, RoundStartEvent_Delay)
+	
+	LockSaferoom()
+}
+
+//Round start event on delay
 static Action:RoundStartEvent_Delay(Handle timer)
 {
+	//Check if a new game has started (both teams have 0 points)
 	int pointsTeamA = L4D2Direct_GetVSCampaignScore(0)
 	int pointsTeamB = L4D2Direct_GetVSCampaignScore(1)
 	
-	//Check if a new game has started
 	if (pointsTeamA == 0 && pointsTeamB == 0)
 	{
 		//Reset all money
 		ResetMoney()
-		canBuy = true
+	}
+	
+	//Enable buying and create menu for survivors
+	g_bCanBuy = true
+	
+	int buyTime = GetConVarInt(initialBuyTime)
+	int extraBuyTime = GetConVarInt(extendedBuyTime)
+	CreateTimer(float(buyTime), EndLockTime)
+	
+	CPrintToChatAll("{olive}[ECO]{default} Survivors have {green}%i (+%i){default} seconds to {blue}!buy{default}.", buyTime, extraBuyTime)
+	
+	for (new i = 1; i <= MaxClients; i++)
+	{
+		if (IsValidClient(i))
+		{
+			if (GetClientTeam(i) == 2)
+			{
+				OpenBuyMenu(i)
+				PrintSurvivorFunds(i)
+			}
+		}
 	}
 }
 
+//Print survivor team's money to chat on round start (only for survivors)
+static PrintSurvivorFunds(client)
+{
+	decl String:name[MAX_NAME_LENGTH]
+	GetClientName(client, name, sizeof(name))
+	int clientMoney = GetMoney(client)
+	CPrintToChat(client, "{olive}[ECO]{default} {blue}%s: {green}%i{default}.", name, clientMoney)
+	
+	//Go through players and print other survivors
+	for (new i = 1; i <= MaxClients; i++)
+	{
+		if (IsValidClient(i))
+		{
+			if (GetClientTeam(i) == 2)
+			{
+				if (i != client)
+				{
+					GetClientName(i, name, sizeof(name))
+					clientMoney = GetMoney(i)
+					CPrintToChat(client, "{olive}[ECO]{default} {blue}%s{default}: {green}$%i", name, clientMoney)
+				}
+			}
+		}
+	}
+}
+
+//Open saferooms
+static Action:EndLockTime(Handle timer)
+{
+	UnlockSaferoom()
+	
+	//Allow buying for specified time after unlocking saferoom
+	int extraBuyTime = GetConVarInt(extendedBuyTime)
+	CreateTimer(float(extraBuyTime), EndBuyTime)
+}
+
+//End buy time
+static Action:EndBuyTime(Handle timer)
+{
+	g_bCanBuy = false
+}
+
+//Completely reset money tracking, re-add all currently loaded clients
 static ResetMoney()
 {
 	g_steamIDs.Clear()
 	g_playerMoney.Clear()
 	
 	//Add all valid players currently in-game
-	for (int i = 1; i <= MaxClients; i++)
+	for (new i = 1; i <= MaxClients; i++)
 	{
 		if (IsValidClient(i))
 		{
@@ -304,8 +430,149 @@ static ResetMoney()
 }
 
 /*
+	BUY TIME
+*/
+//Lock saferoom doors
+static LockSaferoom()
+{
+	g_bSaferoomLocked = true
+	
+	new saferoomDoor = -1
+	while ((saferoomDoor = FindEntityByClassname(saferoomDoor, "prop_door_rotating_checkpoint")) != -1)
+	{
+		SetVariantString("spawnflags 32768")
+		AcceptEntityInput(saferoomDoor, "AddOutput")
+	}
+}
+
+//Unlock saferoom doors
+static UnlockSaferoom()
+{
+	g_bSaferoomLocked = false
+	
+	new saferoomDoor = -1
+	while ((saferoomDoor = FindEntityByClassname(saferoomDoor, "prop_door_rotating_checkpoint")) != -1)
+	{
+		SetVariantString("spawnflags 8192")
+		AcceptEntityInput(saferoomDoor, "AddOutput")
+	}
+}
+
+//Prevent survivors from leaving saferoom during buy time
+public Action L4D_OnFirstSurvivorLeftSafeArea(int client)
+{
+	if (g_bSaferoomLocked)
+	{
+		ReturnSurvivorToSaferoom(client, false)
+		return Plugin_Handled;
+	}
+	
+	return Plugin_Continue;
+}
+
+//Teleport survivors back to the saferoom
+static ReturnSurvivorToSaferoom(client, bool flagsSet = true)
+{
+	int warp_flags
+	if (!flagsSet)
+	{
+		warp_flags = GetCommandFlags("warp_to_start_area")
+		SetCommandFlags("warp_to_start_area", warp_flags & ~FCVAR_CHEAT)
+	}
+
+	if (GetEntProp(client, Prop_Send, "m_isHangingFromLedge"))
+	{
+		L4D_ReviveSurvivor(client)
+	}
+
+	FakeClientCommand(client, "warp_to_start_area")
+
+	if (!flagsSet)
+	{
+		SetCommandFlags("warp_to_start_area", warp_flags)
+	}
+	
+	TeleportEntity(client, NULL_VECTOR, NULL_VECTOR, NULL_VELOCITY)
+}
+
+/*
+	MONEY
+*/
+stock int GetMoney(client)
+{
+	int index = GetClientIndex(client)
+	if (index != -1)
+	{
+		new currentMoney = GetArrayCell(g_playerMoney, index)
+		return currentMoney;
+	}
+	return -1;
+}
+
+static GiveMoney(client, int amount)
+{
+	int index = GetClientIndex(client)
+	if (index != -1)
+	{
+		new maxMoney = GetConVarInt(maximumMoney)
+		new currentMoney = GetArrayCell(g_playerMoney, index)
+		new newMoney = currentMoney + amount
+		
+		//Limit money to maximum amount
+		if (newMoney <= maxMoney)
+		{
+			SetArrayCell(g_playerMoney, index, newMoney)
+		}
+		else
+		{
+			SetArrayCell(g_playerMoney, index, maxMoney)
+		}
+	}
+	
+}
+
+static SpendMoney(client, int amount)
+{
+	int index = GetClientIndex(client)
+	if (index != -1)
+	{
+		new currentMoney = GetArrayCell(g_playerMoney, index)
+		new newMoney = currentMoney - amount
+		
+		//Prevent money going into negatives
+		if (newMoney >= 0)
+		{
+			SetArrayCell(g_playerMoney, index, newMoney)
+		}
+		else
+		{
+			SetArrayCell(g_playerMoney, index, 0)
+		}
+	}
+	
+}
+
+static bool IsValidClient(int client)
+{
+	return (1 <= client <= MaxClients && IsClientInGame(client) && !IsClientSourceTV(client) && !IsFakeClient(client));
+}
+
+static int GetClientIndex(int client)
+{
+	if (IsValidClient(client))
+	{
+		char steamID[64]
+		GetClientAuthId(client, AuthId_Steam2, steamID, sizeof(steamID))
+		new index = FindStringInArray(g_steamIDs,steamID)
+		return index;
+	}
+	return -1;
+}
+
+/*
 	BUY MENUS
 */
+//Draw buy menu footer
 static BuyMenuDrawMoney(client, param2)
 {
 	char buffer[255]
@@ -324,9 +591,9 @@ static Action Buy_Menu(int client, int args)
 
 static OpenBuyMenu(int client)
 {
-	if (canBuy)
+	if (g_bCanBuy)
 	{
-		if (GetClientTeam(client) == PlayerTeam_Survivor)
+		if (GetClientTeam(client) == 2)
 		{
 			Menu menu = new Menu(BuyMenuHandler, MenuAction_Display|MenuAction_Select|MenuAction_Cancel|MenuAction_End)
 			menu.SetTitle("%s", "FailzzMod Buy Menu", LANG_SERVER)
@@ -345,10 +612,14 @@ static OpenBuyMenu(int client)
 		}
 		else
 		{
-			PrintToServer("Not on survivor")
+			InvalidBuyMessage(client, 2)
 			//BuyMenuDrawMoney(client, param2)
 			//Make a separate money only menu
 		}
+	}
+	else
+	{
+		InvalidBuyMessage(client, 0)
 	}
 }
 
@@ -394,18 +665,16 @@ static int BuyMenuHandler(Menu menu, MenuAction action, int param1, int param2)
 			{
 				OpenMenu_Healing(param1)
 			}
-			/*
 			else if (StrEqual(selection, CHOICE_UPGRADES))
 			{
 			}
-			*/
 			
 			PrintToServer("Client %d selected %s", param1, selection)
 		}
 
 		case MenuAction_Cancel:
 		{
-			if (canBuy && param2 == -6)
+			if (g_bCanBuy && param2 == -6)
 			{
 				OpenBuyMenu(param1)
 			}
@@ -421,7 +690,7 @@ static int BuyMenuHandler(Menu menu, MenuAction action, int param1, int param2)
 
 static OpenMenu_Shotguns(int client)
 {
-	if (canBuy)
+	if (g_bCanBuy)
 	{
 		Menu menu = new Menu(BuyMenuHandler_Shotguns, MenuAction_Display|MenuAction_Select|MenuAction_Cancel|MenuAction_End)
 		menu.SetTitle("%s", "Buy: Shotguns", LANG_SERVER)
@@ -441,6 +710,10 @@ static OpenMenu_Shotguns(int client)
 		menu.ExitButton = true
 		menu.ExitBackButton = true
 		menu.Display(client, MENU_TIME_FOREVER)
+	}
+	else
+	{
+		InvalidBuyMessage(client, 0)
 	}
 }
 
@@ -484,7 +757,7 @@ static int BuyMenuHandler_Shotguns(Menu menu, MenuAction action, int param1, int
 
 		case MenuAction_Cancel:
 		{
-			if (canBuy && param2 == -6)
+			if (g_bCanBuy && param2 == -6)
 			{
 				OpenBuyMenu(param1)
 			}
@@ -500,7 +773,7 @@ static int BuyMenuHandler_Shotguns(Menu menu, MenuAction action, int param1, int
 
 static OpenMenu_Automatic(int client)
 {
-	if (canBuy)
+	if (g_bCanBuy)
 	{
 		Menu menu = new Menu(BuyMenuHandler_Automatic, MenuAction_Display|MenuAction_Select|MenuAction_Cancel|MenuAction_End)
 		menu.SetTitle("%s", "Buy: Automatic Weapons", LANG_SERVER)
@@ -526,6 +799,10 @@ static OpenMenu_Automatic(int client)
 		menu.ExitButton = true
 		menu.ExitBackButton = true
 		menu.Display(client, MENU_TIME_FOREVER)
+	}
+	else
+	{
+		InvalidBuyMessage(client, 0)
 	}
 }
 
@@ -584,7 +861,7 @@ static int BuyMenuHandler_Automatic(Menu menu, MenuAction action, int param1, in
 
 		case MenuAction_Cancel:
 		{
-			if (canBuy && param2 == -6)
+			if (g_bCanBuy && param2 == -6)
 			{
 				OpenBuyMenu(param1)
 			}
@@ -600,7 +877,7 @@ static int BuyMenuHandler_Automatic(Menu menu, MenuAction action, int param1, in
 
 static OpenMenu_Snipers(int client)
 {
-	if (canBuy)
+	if (g_bCanBuy)
 	{
 		Menu menu = new Menu(BuyMenuHandler_Snipers, MenuAction_Display|MenuAction_Select|MenuAction_Cancel|MenuAction_End)
 		menu.SetTitle("%s", "Buy: Sniper Rifles", LANG_SERVER)
@@ -620,6 +897,10 @@ static OpenMenu_Snipers(int client)
 		menu.ExitButton = true
 		menu.ExitBackButton = true
 		menu.Display(client, MENU_TIME_FOREVER)
+	}
+	else
+	{
+		InvalidBuyMessage(client, 0)
 	}
 }
 
@@ -663,7 +944,7 @@ static int BuyMenuHandler_Snipers(Menu menu, MenuAction action, int param1, int 
 
 		case MenuAction_Cancel:
 		{
-			if (canBuy && param2 == -6)
+			if (g_bCanBuy && param2 == -6)
 			{
 				OpenBuyMenu(param1)
 			}
@@ -679,7 +960,7 @@ static int BuyMenuHandler_Snipers(Menu menu, MenuAction action, int param1, int 
 
 static OpenMenu_Heavy(int client)
 {
-	if (canBuy)
+	if (g_bCanBuy)
 	{
 		Menu menu = new Menu(BuyMenuHandler_Heavy, MenuAction_Display|MenuAction_Select|MenuAction_Cancel|MenuAction_End)
 		menu.SetTitle("%s", "Buy: Heavy Weapons", LANG_SERVER)
@@ -697,6 +978,10 @@ static OpenMenu_Heavy(int client)
 		menu.ExitButton = true
 		menu.ExitBackButton = true
 		menu.Display(client, MENU_TIME_FOREVER)
+	}
+	else
+	{
+		InvalidBuyMessage(client, 0)
 	}
 }
 
@@ -735,7 +1020,7 @@ static int BuyMenuHandler_Heavy(Menu menu, MenuAction action, int param1, int pa
 
 		case MenuAction_Cancel:
 		{
-			if (canBuy && param2 == -6)
+			if (g_bCanBuy && param2 == -6)
 			{
 				OpenBuyMenu(param1)
 			}
@@ -751,7 +1036,7 @@ static int BuyMenuHandler_Heavy(Menu menu, MenuAction action, int param1, int pa
 
 static OpenMenu_Secondary(int client)
 {
-	if (canBuy)
+	if (g_bCanBuy)
 	{
 		Menu menu = new Menu(BuyMenuHandler_Secondary, MenuAction_Display|MenuAction_Select|MenuAction_Cancel|MenuAction_End)
 		menu.SetTitle("%s", "Buy: Secondary Weapons", LANG_SERVER)
@@ -771,6 +1056,10 @@ static OpenMenu_Secondary(int client)
 		menu.ExitButton = true
 		menu.ExitBackButton = true
 		menu.Display(client, MENU_TIME_FOREVER)
+	}
+	else
+	{
+		InvalidBuyMessage(client, 0)
 	}
 }
 
@@ -812,7 +1101,7 @@ static int BuyMenuHandler_Secondary(Menu menu, MenuAction action, int param1, in
 
 		case MenuAction_Cancel:
 		{
-			if (canBuy && param2 == -6)
+			if (g_bCanBuy && param2 == -6)
 			{
 				OpenBuyMenu(param1)
 			}
@@ -828,7 +1117,7 @@ static int BuyMenuHandler_Secondary(Menu menu, MenuAction action, int param1, in
 
 static OpenMenu_Blunt(int client)
 {
-	if (canBuy)
+	if (g_bCanBuy)
 	{
 		Menu menu = new Menu(BuyMenuHandler_Blunt, MenuAction_Display|MenuAction_Select|MenuAction_Cancel|MenuAction_End)
 		menu.SetTitle("%s", "Buy: Blunt Melee Weapons", LANG_SERVER)
@@ -843,18 +1132,46 @@ static OpenMenu_Blunt(int client)
 		char option6[255]; Format(option6, sizeof(option6), "Shovel ($%i)", price1)
 		char option7[255]; Format(option7, sizeof(option7), "Tonfa ($%i)", price1)
 		
-		//Add options to menu
-		menu.AddItem(BUY_BASEBALLBAT, option1)
-		menu.AddItem(BUY_CRICKETBAT, option2)
-		menu.AddItem(BUY_GUITAR, option3)
-		menu.AddItem(BUY_FRYINGPAN, option4)
-		menu.AddItem(BUY_GOLFCLUB, option5)
-		menu.AddItem(BUY_SHOVEL, option6)
-		menu.AddItem(BUY_TONFA, option7)
+		//Add options to menu (if valid spawns for this map)
+		for(new i = 0; i < g_iValidMeleeCount; i++)
+		{
+			if (StrEqual(g_sValidMelees[i], "baseball_bat", false) == true)
+			{
+				menu.AddItem(BUY_BASEBALLBAT, option1)
+			}
+			else if (StrEqual(g_sValidMelees[i], "cricket_bat", false) == true)
+			{
+				menu.AddItem(BUY_CRICKETBAT, option2)
+			}
+			else if (StrEqual(g_sValidMelees[i], "electric_guitar", false) == true)
+			{
+				menu.AddItem(BUY_GUITAR, option3)
+			}
+			else if (StrEqual(g_sValidMelees[i], "frying_pan", false) == true)
+			{
+				menu.AddItem(BUY_FRYINGPAN, option4)
+			}
+			else if (StrEqual(g_sValidMelees[i], "golfclub", false) == true)
+			{
+				menu.AddItem(BUY_GOLFCLUB, option5)
+			}
+			else if (StrEqual(g_sValidMelees[i], "shovel", false) == true)
+			{
+				menu.AddItem(BUY_SHOVEL, option6)
+			}
+			else if (StrEqual(g_sValidMelees[i], "tonfa", false) == true)
+			{
+				menu.AddItem(BUY_TONFA, option7)
+			}
+		}
 		
 		menu.ExitButton = true
 		menu.ExitBackButton = true
 		menu.Display(client, MENU_TIME_FOREVER)
+	}
+	else
+	{
+		InvalidBuyMessage(client, 0)
 	}
 }
 
@@ -913,7 +1230,7 @@ static int BuyMenuHandler_Blunt(Menu menu, MenuAction action, int param1, int pa
 
 		case MenuAction_Cancel:
 		{
-			if (canBuy && param2 == -6)
+			if (g_bCanBuy && param2 == -6)
 			{
 				OpenMenu_Secondary(param1)
 			}
@@ -929,7 +1246,7 @@ static int BuyMenuHandler_Blunt(Menu menu, MenuAction action, int param1, int pa
 
 static OpenMenu_Sharp(int client)
 {
-	if (canBuy)
+	if (g_bCanBuy)
 	{
 		Menu menu = new Menu(BuyMenuHandler_Sharp, MenuAction_Display|MenuAction_Select|MenuAction_Cancel|MenuAction_End)
 		menu.SetTitle("%s", "Buy: Sharp Melee Weapons", LANG_SERVER)
@@ -944,16 +1261,42 @@ static OpenMenu_Sharp(int client)
 		char option6[255]; Format(option6, sizeof(option6), "Pitchfork ($%i)", price1)
 		
 		//Add options to menu
-		menu.AddItem(BUY_CROWBAR, option1)
-		menu.AddItem(BUY_FIRAXE, option2)
-		menu.AddItem(BUY_KATANA, option3)
-		menu.AddItem(BUY_KNIFE, option4)
-		menu.AddItem(BUY_MACHETE, option5)
-		menu.AddItem(BUY_PITCHFORK, option6)
+				//Add options to menu (if valid spawns for this map)
+		for(new i = 0; i < g_iValidMeleeCount; i++)
+		{
+			if (StrEqual(g_sValidMelees[i], "crowbar", false) == true)
+			{
+				menu.AddItem(BUY_CROWBAR, option1)
+			}
+			else if (StrEqual(g_sValidMelees[i], "fireaxe", false) == true)
+			{
+				menu.AddItem(BUY_FIRAXE, option2)
+			}
+			else if (StrEqual(g_sValidMelees[i], "katana", false) == true)
+			{
+				menu.AddItem(BUY_KATANA, option3)
+			}
+			else if (StrEqual(g_sValidMelees[i], "knife", false) == true)
+			{
+				menu.AddItem(BUY_KNIFE, option4)
+			}
+			else if (StrEqual(g_sValidMelees[i], "machete", false) == true)
+			{
+				menu.AddItem(BUY_MACHETE, option5)
+			}
+			else if (StrEqual(g_sValidMelees[i], "pitchfork", false) == true)
+			{
+				menu.AddItem(BUY_PITCHFORK, option6)
+			}
+		}
 		
 		menu.ExitButton = true
 		menu.ExitBackButton = true
 		menu.Display(client, MENU_TIME_FOREVER)
+	}
+	else
+	{
+		InvalidBuyMessage(client, 0)
 	}
 }
 
@@ -1007,7 +1350,7 @@ static int BuyMenuHandler_Sharp(Menu menu, MenuAction action, int param1, int pa
 
 		case MenuAction_Cancel:
 		{
-			if (canBuy && param2 == -6)
+			if (g_bCanBuy && param2 == -6)
 			{
 				OpenMenu_Secondary(param1)
 			}
@@ -1023,7 +1366,7 @@ static int BuyMenuHandler_Sharp(Menu menu, MenuAction action, int param1, int pa
 
 static OpenMenu_Throwable(int client)
 {
-	if (canBuy)
+	if (g_bCanBuy)
 	{
 		Menu menu = new Menu(BuyMenuHandler_Throwable, MenuAction_Display|MenuAction_Select|MenuAction_Cancel|MenuAction_End)
 		menu.SetTitle("%s", "Buy: Throwables", LANG_SERVER)
@@ -1041,6 +1384,10 @@ static OpenMenu_Throwable(int client)
 		menu.ExitButton = true
 		menu.ExitBackButton = true
 		menu.Display(client, MENU_TIME_FOREVER)
+	}
+	else
+	{
+		InvalidBuyMessage(client, 0)
 	}
 }
 
@@ -1079,7 +1426,7 @@ static int BuyMenuHandler_Throwable(Menu menu, MenuAction action, int param1, in
 
 		case MenuAction_Cancel:
 		{
-			if (canBuy && param2 == -6)
+			if (g_bCanBuy && param2 == -6)
 			{
 				OpenBuyMenu(param1)
 			}
@@ -1095,7 +1442,7 @@ static int BuyMenuHandler_Throwable(Menu menu, MenuAction action, int param1, in
 
 static OpenMenu_Healing(int client)
 {
-	if (canBuy)
+	if (g_bCanBuy)
 	{
 		Menu menu = new Menu(BuyMenuHandler_Healing, MenuAction_Display|MenuAction_Select|MenuAction_Cancel|MenuAction_End)
 		menu.SetTitle("%s", "Buy: Healing Items", LANG_SERVER)
@@ -1115,6 +1462,10 @@ static OpenMenu_Healing(int client)
 		menu.ExitButton = true
 		menu.ExitBackButton = true
 		menu.Display(client, MENU_TIME_FOREVER)
+	}
+	else
+	{
+		InvalidBuyMessage(client, 0)
 	}
 }
 
@@ -1158,7 +1509,7 @@ static int BuyMenuHandler_Healing(Menu menu, MenuAction action, int param1, int 
 
 		case MenuAction_Cancel:
 		{
-			if (canBuy && param2 == -6)
+			if (g_bCanBuy && param2 == -6)
 			{
 				OpenBuyMenu(param1)
 			}
@@ -1175,9 +1526,10 @@ static int BuyMenuHandler_Healing(Menu menu, MenuAction action, int param1, int 
 /*
 	ITEM BUYING FUNCTIONS
 */
+//Process buy requests and spend money
 static MenuBuyItem(client, const char[] item, int itemType = 0)
 {
-	if (canBuy)
+	if (g_bCanBuy)
 	{
 		int index = GetClientIndex(client)
 		if (index != -1)
@@ -1190,10 +1542,19 @@ static MenuBuyItem(client, const char[] item, int itemType = 0)
 				SpendMoney(client, itemPrice)
 				GiveClientItem(client, item, itemType)
 			}
+			else
+			{
+				InvalidBuyMessage(client, 1)
+			}
 		}
+	}
+	else
+	{
+		InvalidBuyMessage(client, 0)
 	}
 }
 
+//Give requested item to client
 static GiveClientItem(client, const char[] item, int itemType = 0)
 {
 	new flagsGive = GetCommandFlags("give")
@@ -1226,6 +1587,7 @@ static GiveClientItem(client, const char[] item, int itemType = 0)
 	SetCommandFlags("upgrade_add", flagsUpgradeAdd|FCVAR_CHEAT)
 }
 
+//Retrieve price of given item
 static int GetItemPrice(const char[] item)
 {
 	//Spaghetti Time
@@ -1366,130 +1728,57 @@ static int GetItemPrice(const char[] item)
 	return itemPrice;
 }
 
-/*
-	MONEY
-*/
-stock int GetMoney(client)
+//Print messages when attempting an invalid buy request
+static InvalidBuyMessage(client, int reason)
 {
-	int index = GetClientIndex(client)
-	if (index != -1)
+	switch(reason)
 	{
-		new currentMoney = GetArrayCell(g_playerMoney, index)
-		return currentMoney;
-	}
-	return -1;
-}
-
-static GiveMoney(client, int amount)
-{
-	int index = GetClientIndex(client)
-	if (index != -1)
-	{
-		new maxMoney = GetConVarInt(maximumMoney)
-		new currentMoney = GetArrayCell(g_playerMoney, index)
-		new newMoney = currentMoney + amount
-		
-		//Limit money to maximum amount
-		if (newMoney <= maxMoney)
+		//Cannot buy
+		case 0:
 		{
-			SetArrayCell(g_playerMoney, index, newMoney)
+			CPrintToChat(client, "{olive}[ECO]{default} You cannot buy at this time.")
 		}
-		else
+		//Not enough money
+		case 1:
 		{
-			SetArrayCell(g_playerMoney, index, maxMoney)
+			CPrintToChat(client, "{olive}[ECO]{default} You cannot afford this item.")
+		}
+		//Not on survivor team
+		case 2:
+		{
+			CPrintToChat(client, "{olive}[ECO]{default} You must be a survivor to buy items.")
 		}
 	}
-	
-}
-
-static SpendMoney(client, int amount)
-{
-	int index = GetClientIndex(client)
-	if (index != -1)
-	{
-		new currentMoney = GetArrayCell(g_playerMoney, index)
-		new newMoney = currentMoney - amount
-		
-		//Prevent money going into negatives
-		if (newMoney >= 0)
-		{
-			SetArrayCell(g_playerMoney, index, newMoney)
-		}
-		else
-		{
-			SetArrayCell(g_playerMoney, index, 0)
-		}
-	}
-	
-}
-
-static bool IsValidClient(int client)
-{
-	return (1 <= client <= MaxClients && IsClientInGame(client) && !IsClientSourceTV(client) && !IsFakeClient(client));
-}
-
-static int GetClientIndex(int client)
-{
-	if (IsValidClient(client))
-	{
-		char steamID[64]
-		GetClientAuthId(client, AuthId_Steam2, steamID, sizeof(steamID))
-		new index = FindStringInArray(g_steamIDs,steamID)
-		return index;
-	}
-	return -1;
 }
 
 /*
 NOTES:
 
 Ideas:
-saferoom door is locked for [x] seconds at the start of each round (non-doored saferooms can teleport you back in like ready up)
 way to drop any item/buy for your team
 money transfer system - lets you send money (in fixed amounts e.g. $500 etc) to a teammate
 maybe some kind of refund system for not needing to use an item when the round ends, maybe this could be an optional award given when reaching the saferoom (but by default no bonus would be awarded for saving your medkit etc)
-speed bonus - bonus awarded for being faster than the other team (e.g. at least 1 minute faster), hard to make it account for all situations and maps though, and would have to ignore tank fights. maybe it can be awarded for each 25% of distance. would just end up rewarding the winning team more most of the time though
-money could be a single pool shared by the entire team, but then it could be griefed by people spamming buys or someone switching to grief
 something to control ammo pile density (e.g. multiply density per map)
-buy menu is always shown until you leave saferoom, but you can always buy stuff if you go back to the starting saferoom (otherwise people could end up with no weapon)
 interacting with ammo pile/pill cabinet can let you buy maybe? or maybe a custom buying point, but custom maps could be an issue
 detect campaign length using functions/mission file, option to have multiplier for shorter/longer than normal campaigns (maybe bonus applied to start money)
-weapon upgrades are  permanent
 weapon upgrade changes:
 	-fire ammo, some kind of nerf like reducing damage dealt, increasing reload time
 	-explosive ammo no longer stumbles
 	-laser does not give as much accuracy
 	-increase deploy time
 	-only 1 person can take upgrade from box
-weakest link "bank" money for scoring
-or wager on winning
-get more points the longer you have someone capped (15 points for inital cap, 5 for every 2 seconds on them)
-extra points per each kill should be fine really
+weakest link "bank" money for scoring, or place wagers on winning
+actually if you heal right before end of round u would get extra money - need to fix that - award extra money for having a medkit, but increase medkit price to compensate? or make the hp calculation count unused medkits
+reduce gl damage by a lot (around 100), + reduce tank damage. increase reload, 2 shots per clip
 
 
 
 Todo:
-steam id is assigned default starting money on joining, track money between map changes
-display amount of money everyone on your team has
 account for round resets (revert money/items back to what it was at start of round)
-functions to lock saferoom/keep players in
 functions to optionally remove item and weapon spawns - need something to allow ammo piles to spawn though, or replace weapons with ammo
-variables to enable heavy weapons, upgrades, etc menu
+variables to enable/disable heavy weapons, upgrades, etc
 admin commands to set money
-show and allow buy menu a bit after round start, hide it when round is going live but still allow buying
-
-
-
-Other Notes:
-health bonuses will ignore any healing items in the player's inventory
-penalties/rewards for incaps vs deaths could have issues, e.g. cases where a player dies instantly without incapping, or incaps then instantly dies from hurt trigger, and timing for when players die if a wipe happens (e.g. before or after round is "over")
-make sure points arent gained/lost once round is over
-
-
-not sure how to handle abuses of the system:
-player joins and buys a bunch of stuff for their team then leaves
-player switches teams between rounds
-what to do when someone leaves (if they dont come back money is wasted and team is at a disadvantage)
-
-
+pass item price handle through buy function directly instead of calling getitemprice
+autobuy for bots when buy time ends (always random t1 + pills, never spend more than the minimum a player could have/gained on last map)
+dont allow points to be gained or lost for things that happen once round is "finished" i.e. score board shows up
 */
