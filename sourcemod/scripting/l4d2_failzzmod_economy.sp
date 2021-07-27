@@ -3,17 +3,17 @@
 #include <sdkhooks>
 #include <colors>
 #include <left4dhooks>
-#include <weapons>
 
 public Plugin:myinfo = 
 {
 	name = "FailzzMod Economy",
 	author = "Derpduck",
-	description = "Prototype for FailzzMod economy system",
+	description = "A CS:GO-style economy system in L4D2, for FailzzMod",
 	version = "1",
 	url = "https://github.com/Derpduck/Derpduck-L4D2-Scripts"
 }
 
+//Return survivors to saferoom
 #define NULL_VELOCITY view_as<float>({0.0, 0.0, 0.0})
 
 //TRACK STEAM IDs
@@ -22,6 +22,7 @@ ArrayList g_steamIDs
 ArrayList g_playerMoney
 
 //MENU DEFINES
+//Base menu choices
 #define CHOICE_SHOTGUNS "#choice_shotguns"
 #define CHOICE_AUTOMATIC "#choice_automatic"
 #define CHOICE_SNIPERS "#choice_snipers"
@@ -75,7 +76,7 @@ ArrayList g_playerMoney
 #define BUY_MACHETE "#buy_machete"
 #define BUY_PITCHFORK "#buy_pitchfork"
 
-//Enums
+//ENUMS
 enum
 {
 	teamNone,
@@ -84,13 +85,16 @@ enum
 	teamInfected
 }
 
-//Constants
+//CONSTANTS
 //const SPAWNFLAGS_IGNORE_USE = 32768
 
-//Variables
+//VARIABLES
+//Round state
 bool g_bCanBuy = false
 bool g_bRoundLive = false
 bool g_bSaferoomLocked = false
+int g_iTimeSinceRoundStarted = 0
+//Valid melee weapons
 int g_iValidMeleeCount = 0
 new String:g_sValidMelees[16][32]
 int g_iTeamALostCounter = 0
@@ -98,39 +102,26 @@ int g_iTeamBLostCounter = 0
 int g_iAreTeamsFlipped = 0
 int g_iPointsTeamA = 0
 int g_iPointsTeamB = 0
-
-//Track cappers landing and cap duration
-/*
-int g_iChokeSmokerID = 0
-int g_iChokeSmokerTime = 0
-int g_iPounceHunterID = 0
-int g_iPounceHunterTime = 0
-int g_iLatchJockeyID = 0
-int g_iLatchJockeyTime = 0
-int g_iPoundChargerID = 0
-int g_iPoundChargerTime = 0
-*/
+//Cappers landing and cap duration
+int g_iSmokerChokeID = 0
+int g_iHunterPounceID = 0
+int g_iJockeyRideID = 0
+int g_iChargerPummelID = 0
 
 /*
 	CONVARS
 */
 //BUY TIME
 ConVar	initialBuyTime, extendedBuyTime;
-
 //MONEY
 ConVar	startingMoney, maximumMoney;
-
-//AWARD CONDITIONS
-//ConVar	personalWitchKill, personalHealth;
-
 //AWARD AMOUNTS
 ConVar	awardRoundEnd, awardWonMap, awardLostMap, awardConsecutiveLoss, awardExtraConsecutiveLoss,
 		awardKilledTank, awardKilledWitch,
 		awardWipedSurvivors, awardSurvivorIncapped, awardSurvivorKilled,
 		awardAbilityLanded, awardSkilledAbilityLanded, awardLongPinTime,
-		awardHealthGreen, awardHealthYellow, awardHealthRed, awardHealthTempOnly, awardDistanceMultiplier;
-		//awardTier1Bonus;
-
+		awardHealthGreen, awardHealthYellow, awardHealthRed, awardHealthTempOnly,
+		awardDistanceMultiplier;
 //ITEM PRICES
 ConVar	priceShotgunPump, priceShotgunChrome,
 		priceUzi, priceUziSilenced, priceUziMP5,
@@ -144,7 +135,6 @@ ConVar	priceShotgunPump, priceShotgunChrome,
 		pricePainPills, priceAdrenaline, priceMedkit, priceDefibrillator;
 /*
 ConVar	priceLaser, priceFireAmmo, priceExplosiveAmmo;
-ConVar	priceGnome, priceCola;
 */
 
 ConVar economyDebug;
@@ -152,58 +142,36 @@ ConVar economyDebug;
 public OnPluginStart()
 {
 	//HOOKS
+	//Round state
 	HookEvent("round_start", EventHook:RoundStartEvent, EventHookMode_PostNoCopy)
+	//Player finished loading in
+	HookEvent("player_activate", EventHook:PlayerActivateEvent, EventHookMode_Post)
+	//General award events
 	HookEvent("player_death", EventHook:PlayerDeathEvent, EventHookMode_Post)
 	HookEvent("witch_killed", EventHook:WitchKilledEvent, EventHookMode_Post)
 	HookEvent("player_incapacitated", EventHook:PlayerIncappedEvent, EventHookMode_Post)
-	//Infected ability hooks
-	HookEvent("choke_start", EventHook:ChokeStartEvent, EventHookMode_Post)		//Smoker
-	//HookEvent("choke_end", EventHook:ChokeEndEvent, EventHookMode_Post)		//Smoker
+	//Infected ability award events
+	HookEvent("choke_start", EventHook:ChokeStartEvent, EventHookMode_Post) //Smoker
+	HookEvent("tongue_release", EventHook:TongueReleaseEvent, EventHookMode_Post) //Smoker
 	HookEvent("jockey_ride", EventHook:JockeyRideEvent, EventHookMode_Post) //Jockey
+	HookEvent("jockey_ride_end", EventHook:JockeyRideEndEvent, EventHookMode_Post) //Jockey
 	HookEvent("charger_pummel_start", EventHook:ChargerPummelStartEvent, EventHookMode_Post) //Charger
+	HookEvent("charger_pummel_end", EventHook:ChargerPummelEndEvent, EventHookMode_Post) //Charger
 	HookEvent("lunge_pounce", EventHook:HunterPounceEvent, EventHookMode_Post) //Hunter
+	HookEvent("pounce_stopped", EventHook:HunterPounceStoppedEvent, EventHookMode_Post) //Hunter
 	HookEvent("player_now_it", EventHook:BoomerLandedEvent, EventHookMode_Post) //Boomer
-	//Skilled ability additional hooks
-	HookEvent("player_falldamage", EventHook:PlayerFalldamageEvent, EventHookMode_Post)
-	HookEvent("player_ledge_grab", EventHook:PlayerLedgeGrabEvent, EventHookMode_Post)
+	//Skilled ability award events
+	HookEvent("player_falldamage", EventHook:PlayerFalldamageEvent, EventHookMode_Post) //Fall damage
+	HookEvent("player_ledge_grab", EventHook:PlayerLedgeGrabEvent, EventHookMode_Post) //Ledge hangs
+	HookEvent("charger_impact", EventHook:ChargerImpactEvent, EventHookMode_Post) //Multi charges
 	
-	/*
-//GENERIC CAPPER?
-//lunge_pounce
-pounce_end
-pounce_stopped
-ability_use - excludes jockey
-
-//SMOKER
-//"tongue_grab" 
-//"choke_start"
-//choke_end
-
-//CHARGER
-charger_pummel_start
-Event "charger_charge_start" 
-Event "charger_carry_start" 
-Event "charger_carry_end" 
-Event "charger_charge_end" 
-
-//jockey
-Event "jockey_ride" 
-Event "jockey_ride_end" 
-Event "pounce_end" 
-
-*/
-	
-	
-	/* hooks to try
-	player_ledge_grab
-	heal_success
-	*/
-	
+	//Debug mode
 	economyDebug = CreateConVar("economy_debug",				"0",		"Enable some debug prints")
 	
 	//ADMIN COMMANDS
 	RegAdminCmd("givemoney", GiveMoney_Cmd, ADMFLAG_GENERIC, "Gives specified amount of money to player")
 	RegAdminCmd("removemoney", RemoveMoney_Cmd, ADMFLAG_GENERIC, "Removes specified amount of money from player")
+	RegAdminCmd("extendbuy", ExtendBuy_Cmd, ADMFLAG_GENERIC, "Extends buy time by 30 seconds (even if buy time has ended)")
 	
 	//CLIENT COMMANDS
 	RegConsoleCmd("buy", Buy_Menu)
@@ -217,30 +185,25 @@ Event "pounce_end"
 	startingMoney				= CreateConVar("starting_money",				"1600",		"Amount of money players start out with upon joining for the first time")
 	maximumMoney				= CreateConVar("maximum_money",					"16000",	"Maximum amount of money players are allowed to have") //Placeholder value
 	
-	//AWARD CONDITIONS
-	//personalWitchKill			= CreateConVar("personal_witch_kill",			"1",		"Is witch kill bonus money awarded to the entire team or individually (0 = Team, 1 = Personal)")
-	//personalHealth				= CreateConVar("personal_health",				"1",		"Is health bonus money awarded to the entire team or individually (0 = Team, 1 = Personal)")
-	
 	//AWARD AMOUNTS
 	awardRoundEnd				= CreateConVar("award_round_end",				"1600",		"Money awarded to survivors on (half) round end (0 = No Award) [Team]")
 	awardWonMap					= CreateConVar("award_won_map",					"1200",		"Money awarded for winning a map (0 = No Award) [Team]")
 	awardLostMap				= CreateConVar("award_lost_map",				"900",		"Money awarded for losing a map (0 = No Award) [Team]")
 	awardConsecutiveLoss		= CreateConVar("award_consecutive_loss",		"1000",		"Extra money awarded for losing 2 maps consecutively (0 = No Award) [Team]")
 	awardExtraConsecutiveLoss	= CreateConVar("award_extra_consecutive_loss",	"1100",		"Extra money awarded for losing 3 or more maps consecutively (0 = No Award) [Team]")
-	awardKilledTank				= CreateConVar("award_killed_tank",				"250",		"Money awarded for killing a tank (0 = No Award) [Team]") //Placeholder value
-	awardKilledWitch			= CreateConVar("award_killed_witch",			"100",		"Money awarded for killing a witch in 1 shot (0 = No Award) [Team / Personal (default)]") //Placeholder value
-	awardWipedSurvivors			= CreateConVar("award_wiped_survivors",			"300",		"Money awarded for killing all the survivors (0 = No Award) [Team]") //Placeholder value
-	awardSurvivorIncapped		= CreateConVar("award_survivor_incapped",		"25",		"Money awarded each time a survivor is incapped (0 = No Award) [Personal]") //Placeholder value
-	awardSurvivorKilled			= CreateConVar("award_survivor_killed",			"50",		"Money awarded each time a survivor is killed (0 = No Award) [Personal]") //Placeholder value
-	awardAbilityLanded			= CreateConVar("award_ability_landed",			"10",		"Money awarded for landing an infected ability (excludes spitter) (0 = No Award) [Personal]") //Placeholder value
+	awardKilledTank				= CreateConVar("award_killed_tank",				"150",		"Money awarded for killing a tank (0 = No Award) [Team]") //Placeholder value
+	awardKilledWitch			= CreateConVar("award_killed_witch",			"75",		"Money awarded for killing a witch in 1 shot (0 = No Award) [Team / Personal (default)]") //Placeholder value
+	awardWipedSurvivors			= CreateConVar("award_wiped_survivors",			"200",		"Money awarded for killing all the survivors (0 = No Award) [Team]") //Placeholder value
+	awardSurvivorIncapped		= CreateConVar("award_survivor_incapped",		"25",		"Money awarded for incapping a survivor (0 = No Award) [Personal]") //Placeholder value
+	awardSurvivorKilled			= CreateConVar("award_survivor_killed",			"50",		"Money awarded for killing a survivor (0 = No Award) [Personal]") //Placeholder value
+	awardAbilityLanded			= CreateConVar("award_ability_landed",			"5",		"Money awarded for landing an infected ability (excludes spitter) (0 = No Award) [Personal]") //Placeholder value
 	awardSkilledAbilityLanded	= CreateConVar("award_skill_ability_landed",	"10",		"Money awarded for landing infected abilities skillfully (0 = No Award) [Personal]") //Placeholder value
 	awardLongPinTime			= CreateConVar("award_long_pin_time",			"20",		"Money awarded for pinning a survivor for more than 5 seconds (0 = No Award) [Personal]") //Placeholder value
-	awardHealthGreen			= CreateConVar("award_health_green",			"100",		"Money awarded for each survivor that completes the map with green health (0 = No Award) [Team / Personal (default)]") //Placeholder value
-	awardHealthYellow			= CreateConVar("award_health_yellow",			"60",		"Money awarded for each survivor that completes the map with yellow health (0 = No Award) [Team / Personal (default)]") //Placeholder value
-	awardHealthRed				= CreateConVar("award_health_red",				"30",		"Money awarded for each survivor that completes the map with red health (0 = No Award) [Team / Personal (default)]") //Placeholder value
-	awardHealthTempOnly			= CreateConVar("award_health_temp_only",		"20",		"Money awarded for each survivor that completes the map with only temporary health (0 = No Award) [Team / Personal (default)]") //Placeholder value
-	awardDistanceMultiplier		= CreateConVar("award_distance_multiplier",		"0.25",		"Multiplier of distance points for money awarded (0 = No Award)") //Placeholder value
-	//awardTier1Bonus				= CreateConVar("award_tier1_bonus",				"100",		"Money awarded for each tier 1 weapon the survivors have when reaching the saferoom (0 = No Award) [Team / Personal (default)]") //Placeholder value
+	awardHealthGreen			= CreateConVar("award_health_green",			"75",		"Money awarded for each survivor that completes the map with green health (0 = No Award) [Team / Personal (default)]") //Placeholder value
+	awardHealthYellow			= CreateConVar("award_health_yellow",			"30",		"Money awarded for each survivor that completes the map with yellow health (0 = No Award) [Team / Personal (default)]") //Placeholder value
+	awardHealthRed				= CreateConVar("award_health_red",				"15",		"Money awarded for each survivor that completes the map with red health (0 = No Award) [Team / Personal (default)]") //Placeholder value
+	awardHealthTempOnly			= CreateConVar("award_health_temp_only",		"10",		"Money awarded for each survivor that completes the map with only temporary health (0 = No Award) [Team / Personal (default)]") //Placeholder value
+	awardDistanceMultiplier		= CreateConVar("award_distance_multiplier",		"0.25",		"Multiplier of distance points as money awarded (0 = No Award)") //Placeholder value
 	
 	//ITEM PRICES
 	//Shotguns
@@ -279,15 +242,12 @@ Event "pounce_end"
 	pricePainPills				= CreateConVar("price_pain_pills",				"400",		"Cost of weapon: pain_pills")
 	priceAdrenaline				= CreateConVar("price_adrenaline",				"650",		"Cost of weapon: adrenaline")
 	priceMedkit					= CreateConVar("price_medkit",					"1000",		"Cost of weapon: first_aid_kit")
-	priceDefibrillator			= CreateConVar("price_defibrillator",			"1550",		"Cost of weapon: defibrillator")
+	priceDefibrillator			= CreateConVar("price_defibrillator",			"1400",		"Cost of weapon: defibrillator")
 	/*
 	//Upgrades
 	priceLaser					= CreateConVar("price_laser",					"2500",	"Cost of upgrade: laser sights") //Placeholder value
 	priceFireAmmo				= CreateConVar("price_fire_ammo",				"3000",	"Cost of upgrade: upgradepack_incendiary") //Placeholder value
 	priceExplosiveAmmo			= CreateConVar("price_explosive_ammo",			"5000",	"Cost of upgrade: upgradepack_explosive") //Placeholder value
-	//Fun
-	priceGnome					= CreateConVar("price_gnome",					"50",		"Cost of item: gnome")
-	priceCola					= CreateConVar("price_cola",					"50",		"Cost of item: cola_bottles")
 	*/
 	
 	//Initalize money tracking
@@ -312,10 +272,35 @@ static GetValidMelees()
 /*
 	INITIALIZE CLIENTS
 */
-//When client loads in begin tracking money
+//When client connects in begin tracking money
 public OnClientPutInServer(client)
 {
 	AddClientToList(client)
+}
+
+//Client finished loading in, show menu
+static Action:PlayerActivateEvent(Handle:hEvent, const String:name[], bool:dontBroadcast)
+{
+	new client = GetClientOfUserId(GetEventInt(hEvent, "userid"))
+	
+	//Show menu if client is survivor and it is possible to buy
+	if (IsValidClient(client))
+	{
+		if (GetClientTeam(client) == teamSurvivor)
+		{
+			if (g_bCanBuy)
+			{
+				CreateTimer(1.0, BuyMenuAutoShow, client)
+				int currentTime = GetTime()
+				int timeLeft = currentTime - g_iTimeSinceRoundStarted
+				PrintToChatAll("%i - %i",currentTime, g_iTimeSinceRoundStarted)
+				if (g_iTimeSinceRoundStarted != 0)
+				{
+					CPrintToChat(client, "{olive}[ECO]{default} You have {green}%i{default} seconds left to {blue}!buy{default}.", timeLeft)
+				}
+			}
+		}
+	}
 }
 
 //Add client to money tracking arrays
@@ -351,8 +336,8 @@ static AddClientToList(client)
 	}
 }
 
-//Remove clients from money tracking list
-static RemoveClientFromList(client)
+//Remove clients from money tracking list - stock since we don't use this
+stock RemoveClientFromList(client)
 {
 	//Valid client
 	if (IsValidClient(client))
@@ -383,6 +368,7 @@ static RoundStartEvent(Handle:event, const String:name[], bool:dontBroadcast)
 	g_bCanBuy = false
 	g_bRoundLive = false
 	GetValidMelees()
+	g_iTimeSinceRoundStarted = 0
 	CreateTimer(15.0, RoundStartEvent_Delay)
 	
 	LockSaferoom()
@@ -391,24 +377,19 @@ static RoundStartEvent(Handle:event, const String:name[], bool:dontBroadcast)
 //Round start event on delay
 static Action:RoundStartEvent_Delay(Handle timer)
 {
+	//Reset global variables
 	g_iAreTeamsFlipped = AreTeamsFlipped()
-	int isSecondHalf = InSecondHalfOfRound()
 	
 	g_iPointsTeamA = 0
 	g_iPointsTeamB = 0
 	
-	/*
-	g_iChokeSmokerID = 0
-	g_iChokeSmokerTime = 0
-	g_iPounceHunterID = 0
-	g_iPounceHunterTime = 0
-	g_iLatchJockeyID = 0
-	g_iLatchJockeyTime = 0
-	g_iPoundChargerID = 0
-	g_iPoundChargerTime = 0
-	*/
+	g_iSmokerChokeID = 0
+	g_iHunterPounceID = 0
+	g_iJockeyRideID = 0
+	g_iChargerPummelID = 0
 	
 	//Check if a new game has started (both teams have 0 points)
+	int isSecondHalf = InSecondHalfOfRound()
 	if (isSecondHalf)
 	{
 		int pointsTeamA = L4D2Direct_GetVSCampaignScore(0)
@@ -425,6 +406,7 @@ static Action:RoundStartEvent_Delay(Handle timer)
 	
 	//Enable buying and create menu for survivors
 	g_bCanBuy = true
+	g_iTimeSinceRoundStarted = GetTime()
 	
 	int buyTime = GetConVarInt(initialBuyTime)
 	int extraBuyTime = GetConVarInt(extendedBuyTime)
@@ -503,6 +485,7 @@ static Action:EndLockTime(Handle timer)
 static Action:EndBuyTime(Handle timer)
 {
 	g_bCanBuy = false
+	g_iTimeSinceRoundStarted = 0
 	
 	//If player is a bot once buy time expires, give them some items
 	for (new i = 1; i <= MaxClients; i++)
@@ -704,7 +687,6 @@ static Action:RoundEndEvent_Delay(Handle timer)
 	int i_awardHealthRed = GetConVarInt(awardHealthRed)
 	int i_awardHealthTempOnly = GetConVarInt(awardHealthTempOnly)
 	float f_awardDistanceMultiplier = GetConVarFloat(awardDistanceMultiplier)
-	//int i_awardTier1Bonus = GetConVarInt(awardTier1Bonus)
 	
 	//Team scores
 	int teamA = teamSurvivor
@@ -868,19 +850,6 @@ static Action:RoundEndEvent_Delay(Handle timer)
 			{
 				if (aliveSurvivors > 0)
 				{
-					//Finished the map with a T1
-					/*
-					int weponSlot = GetSlotFromWeaponId(view_as<WeaponId>(0))
-					int playerWeapon = GetPlayerWeaponSlot(i, weponSlot)
-					int playerWepid = view_as<int>(IdentifyWeapon(playerWeapon))
-					
-					if (playerWepid == WEPID_SMG || playerWepid == WEPID_SMG_SILENCED || playerWepid == WEPID_SMG_MP5 || playerWepid == WEPID_PUMPSHOTGUN || playerWepid == WEPID_SHOTGUN_CHROME)
-					{
-						GiveMoney(i, i_awardTier1Bonus, "Tier 1 Weapon")
-						personalBonus += i_awardTier1Bonus
-					}
-					*/
-					
 					//Bonus based on health
 					if (IsPlayerAlive(i) && !IsPlayerIncap(i) && !IsPlayerLedged(i))
 					{
@@ -940,13 +909,12 @@ static Action:PlayerDeathEvent(Handle:hEvent, const String:name[], bool:dontBroa
 			PrintToChatAll("DEBUG PLAYER DEATH: attacker id: %i, infected name: %s",attacker,s_atkname)
 		}
 		
-		//Award amounts
-		int i_awardKilledTank = GetConVarInt(awardKilledTank)
-		int i_awardSurvivorKilled = GetConVarInt(awardSurvivorKilled)
-		
 		//Tank killed, award survivors
 		if (StrEqual(s_victimName, "Tank", false))
 		{
+			//Award amounts
+			int i_awardKilledTank = GetConVarInt(awardKilledTank)
+			
 			AwardTeam(teamSurvivor, i_awardKilledTank, "Killed Tank")
 			PrintEarningsTeam(teamSurvivor, i_awardKilledTank, 1)
 		}
@@ -954,6 +922,9 @@ static Action:PlayerDeathEvent(Handle:hEvent, const String:name[], bool:dontBroa
 		//Survivor killed, award the infected that killed them
 		if (GetClientTeam(victim) == teamSurvivor)
 		{
+			//Award amounts
+			int i_awardSurvivorKilled = GetConVarInt(awardSurvivorKilled)
+			
 			//For SOME reason the attacker is set to userid 0 with certain SI
 			if (IsValidClient(attacker))
 			{
@@ -965,6 +936,7 @@ static Action:PlayerDeathEvent(Handle:hEvent, const String:name[], bool:dontBroa
 				}
 			}
 			//We don't know who killed the survivor, so award all infected equally
+			//Need to change this because having a valid attacker that is a survivor will not give any reward at all
 			else
 			{
 				int i_awardSurvivorKilled_Unknown = RoundToFloor(float(i_awardSurvivorKilled) / 4)
@@ -983,9 +955,6 @@ static WitchKilledEvent(Handle:hEvent, const String:name[], bool:dontBroadcast)
 		new killer = GetClientOfUserId(GetEventInt(hEvent, "userid"))
 		new fullCrown = GetEventBool(hEvent, "oneshot")
 		
-		//Award amounts
-		int i_awardKilledWitch = GetConVarInt(awardKilledWitch)
-		
 		//Only award 1-shot crowns
 		if (fullCrown)
 		{
@@ -994,6 +963,9 @@ static WitchKilledEvent(Handle:hEvent, const String:name[], bool:dontBroadcast)
 			{
 				if (GetClientTeam(killer) == teamSurvivor)
 				{
+					//Award amounts
+					int i_awardKilledWitch = GetConVarInt(awardKilledWitch)
+					
 					GiveMoney(killer, i_awardKilledWitch)
 					EarningsToConsole(killer, i_awardKilledWitch, "Crowned Witch")
 					CPrintToChat(killer, "{olive}[ECO]{default} You earned: {green}$%i{default} for {blue}crowning the witch{default}!", i_awardKilledWitch)
@@ -1011,15 +983,15 @@ static PlayerIncappedEvent(Handle:hEvent, const String:name[], bool:dontBroadcas
 		new victim = GetClientOfUserId(GetEventInt(hEvent, "userid"))
 		new attacker = GetClientOfUserId(GetEventInt(hEvent, "attacker"))
 		
-		//Award amounts
-		int i_awardSurvivorIncapped = GetConVarInt(awardSurvivorIncapped)
-		
 		if (GetClientTeam(victim) == teamSurvivor)
 		{
 			if (IsValidClient(attacker))
 			{
 				if (GetClientTeam(attacker) == teamInfected)
 				{
+					//Award amounts
+					int i_awardSurvivorIncapped = GetConVarInt(awardSurvivorIncapped)
+					
 					GiveMoney(attacker, i_awardSurvivorIncapped)
 					EarningsToConsole(attacker, i_awardSurvivorIncapped, "Survivor Incapped")
 					CPrintToChat(attacker, "{olive}[ECO]{default} You earned: {green}$%i{default} for {red}incapping a survivor{default}!", i_awardSurvivorIncapped)
@@ -1030,110 +1002,231 @@ static PlayerIncappedEvent(Handle:hEvent, const String:name[], bool:dontBroadcas
 }
 
 //INFECTED ABILITY AWARDS
-//awardAbilityLanded
-//awardSkilledAbilityLanded
-//awardLongPinTime
-/*
-g_iChokeSmokerID = 0
-g_iChokeSmokerTime = 0
-g_iPounceHunterID = 0
-g_iPounceHunterTime = 0
-g_iLatchJockeyID = 0
-g_iLatchJockeyTime = 0
-g_iPoundChargerID = 0
-g_iPoundChargerTime = 0
-*/
-
-//Smoker
+//SMOKER
+//Pull started and dealt damage
 static ChokeStartEvent(Handle:hEvent, const String:name[], bool:dontBroadcast)
 {
 	if (g_bRoundLive)
 	{
 		new infected = GetClientOfUserId(GetEventInt(hEvent, "userid"))
 		
-		//Award amounts
-		int i_awardAbilityLanded = GetConVarInt(awardAbilityLanded)
-		
 		if (IsValidClient(infected))
 		{
-			//Only supports 1 smoker at a time
-			//g_iChokeSmokerID = smoker
-			//g_iChokeSmokerTime = 0
+			//Award amounts
+			int i_awardAbilityLanded = GetConVarInt(awardAbilityLanded)
+			
 			GiveMoney(infected, i_awardAbilityLanded)
 			EarningsToConsole(infected, i_awardAbilityLanded, "Survivor Capped")
 			CPrintToChat(infected, "{olive}[ECO]{default} You earned: {green}$%i{default} for {red}capping a survivor{default}!", i_awardAbilityLanded)
+			
+			//Start timer for long cap duration, only supports 1 infected of this type
+			g_iSmokerChokeID = infected
+			CreateTimer(5.0, ChokeStartEvent_LongCap, infected)
 		}
 	}
 }
-/*
-static ChokeEndEvent(Handle:hEvent, const String:name[], bool:dontBroadcast)
+
+//Pull stopped
+static TongueReleaseEvent(Handle:hEvent, const String:name[], bool:dontBroadcast)
+{
+	new infected = GetClientOfUserId(GetEventInt(hEvent, "userid"))
+	if (IsValidClient(infected))
+	{
+		g_iSmokerChokeID = 0
+	}
+}
+
+//Pull timer
+static Action:ChokeStartEvent_LongCap(Handle timer, infected)
 {
 	if (g_bRoundLive)
 	{
-		new smoker = GetClientOfUserId(GetEventInt(hEvent, "userid"))
-		if (IsValidClient(smoker))
+		if (g_iSmokerChokeID != 0 && infected == g_iSmokerChokeID)
 		{
-			//Only supports 1 smoker at a time
-			g_iChokeSmokerID = smoker
-			g_iChokeSmokerTime = 0
+			if (IsValidClient(infected))
+			{
+				//Award amounts
+				int i_awardLongPinTime = GetConVarInt(awardLongPinTime)
+				
+				GiveMoney(infected, i_awardLongPinTime)
+				EarningsToConsole(infected, i_awardLongPinTime, "Long Cap Time")
+				CPrintToChat(infected, "{olive}[ECO]{default} You earned: {green}$%i{default} for {red}long cap duration{default}!", i_awardLongPinTime)
+			}
 		}
 	}
 }
-*/
 
-//Jockey
+//JOCKEY
+//Ride started
 static JockeyRideEvent(Handle:hEvent, const String:name[], bool:dontBroadcast)
 {
 	if (g_bRoundLive)
 	{
 		new infected = GetClientOfUserId(GetEventInt(hEvent, "userid"))
 		
-		//Award amounts
-		int i_awardAbilityLanded = GetConVarInt(awardAbilityLanded)
-		
 		if (IsValidClient(infected))
 		{
+			//Award amounts
+			int i_awardAbilityLanded = GetConVarInt(awardAbilityLanded)
+			
 			GiveMoney(infected, i_awardAbilityLanded)
 			EarningsToConsole(infected, i_awardAbilityLanded, "Survivor Capped")
 			CPrintToChat(infected, "{olive}[ECO]{default} You earned: {green}$%i{default} for {red}capping a survivor{default}!", i_awardAbilityLanded)
+			
+			//Start timer for long cap duration, only supports 1 infected of this type
+			g_iJockeyRideID = infected
+			CreateTimer(5.0, JockeyRideEvent_LongCap, infected)
 		}
 	}
 }
 
-//Charger
+//Ride ended
+static JockeyRideEndEvent(Handle:hEvent, const String:name[], bool:dontBroadcast)
+{
+	new infected = GetClientOfUserId(GetEventInt(hEvent, "userid"))
+	if (IsValidClient(infected))
+	{
+		g_iJockeyRideID = 0
+	}
+}
+
+//Ride timer
+static Action:JockeyRideEvent_LongCap(Handle timer, infected)
+{
+	if (g_bRoundLive)
+	{
+		if (g_iJockeyRideID != 0 && infected == g_iJockeyRideID)
+		{
+			if (IsValidClient(infected))
+			{
+				//Award amounts
+				int i_awardLongPinTime = GetConVarInt(awardLongPinTime)
+				
+				GiveMoney(infected, i_awardLongPinTime)
+				EarningsToConsole(infected, i_awardLongPinTime, "Long Cap Time")
+				CPrintToChat(infected, "{olive}[ECO]{default} You earned: {green}$%i{default} for {red}long cap duration{default}!", i_awardLongPinTime)
+			}
+		}
+	}
+}
+
+//CHARGER
+//Charger pummel start
 static ChargerPummelStartEvent(Handle:hEvent, const String:name[], bool:dontBroadcast)
 {
 	if (g_bRoundLive)
 	{
 		new infected = GetClientOfUserId(GetEventInt(hEvent, "userid"))
 		
-		//Award amounts
-		int i_awardAbilityLanded = GetConVarInt(awardAbilityLanded)
-		
 		if (IsValidClient(infected))
 		{
+			//Award amounts
+			int i_awardAbilityLanded = GetConVarInt(awardAbilityLanded)
+			
 			GiveMoney(infected, i_awardAbilityLanded)
 			EarningsToConsole(infected, i_awardAbilityLanded, "Survivor Capped")
 			CPrintToChat(infected, "{olive}[ECO]{default} You earned: {green}$%i{default} for {red}capping a survivor{default}!", i_awardAbilityLanded)
+			
+			//Start timer for long cap duration, only supports 1 infected of this type
+			g_iChargerPummelID = infected
+			CreateTimer(5.0, ChargerPummelEvent_LongCap, infected)
 		}
 	}
 }
 
-//Hunter
+//Charger pummel end
+static ChargerPummelEndEvent(Handle:hEvent, const String:name[], bool:dontBroadcast)
+{
+	new infected = GetClientOfUserId(GetEventInt(hEvent, "userid"))
+	if (IsValidClient(infected))
+	{
+		g_iChargerPummelID = 0
+	}
+}
+
+//Charger pummel timer
+static Action:ChargerPummelEvent_LongCap(Handle timer, infected)
+{
+	if (g_bRoundLive)
+	{
+		if (g_iChargerPummelID != 0 && infected == g_iChargerPummelID)
+		{
+			if (IsValidClient(infected))
+			{
+				//Award amounts
+				int i_awardLongPinTime = GetConVarInt(awardLongPinTime)
+				
+				GiveMoney(infected, i_awardLongPinTime)
+				EarningsToConsole(infected, i_awardLongPinTime, "Long Cap Time")
+				CPrintToChat(infected, "{olive}[ECO]{default} You earned: {green}$%i{default} for {red}long cap duration{default}!", i_awardLongPinTime)
+			}
+		}
+	}
+}
+
+//HUNTER
+//Hunter pounce landed
 static HunterPounceEvent(Handle:hEvent, const String:name[], bool:dontBroadcast)
 {
 	if (g_bRoundLive)
 	{
 		new infected = GetClientOfUserId(GetEventInt(hEvent, "userid"))
 		
-		//Award amounts
-		int i_awardAbilityLanded = GetConVarInt(awardAbilityLanded)
-		
 		if (IsValidClient(infected))
 		{
+			//Award amounts
+			int i_awardAbilityLanded = GetConVarInt(awardAbilityLanded)
+			
 			GiveMoney(infected, i_awardAbilityLanded)
 			EarningsToConsole(infected, i_awardAbilityLanded, "Survivor Capped")
 			CPrintToChat(infected, "{olive}[ECO]{default} You earned: {green}$%i{default} for {red}capping a survivor{default}!", i_awardAbilityLanded)
+			
+			//Start timer for long cap duration, only supports 1 infected of this type
+			g_iHunterPounceID = infected
+			CreateTimer(5.0, HunterPounceEvent_LongCap, infected)
+			
+			//High damage pounce - 600 distance seems to get 15 damage
+			new distance = GetEventInt(hEvent, "distance")
+			
+			if (distance >= 600)
+			{
+				//Award amounts
+				int i_awardSkilledAbilityLanded = GetConVarInt(awardSkilledAbilityLanded)
+				
+				GiveMoney(infected, i_awardSkilledAbilityLanded)
+				EarningsToConsole(infected, i_awardSkilledAbilityLanded, "High Damage Pounce")
+				CPrintToChat(infected, "{olive}[ECO]{default} You earned: {green}$%i{default} for landing a {red}high damage pounce{default}!", i_awardSkilledAbilityLanded)
+			}
+		}
+	}
+}
+
+//Hunter pounce end
+static HunterPounceStoppedEvent(Handle:hEvent, const String:name[], bool:dontBroadcast)
+{
+	new infected = GetClientOfUserId(GetEventInt(hEvent, "userid"))
+	if (IsValidClient(infected))
+	{
+		g_iHunterPounceID = 0
+	}
+}
+
+//Hunter pounce timer
+static Action:HunterPounceEvent_LongCap(Handle timer, infected)
+{
+	if (g_bRoundLive)
+	{
+		if (g_iHunterPounceID != 0 && infected == g_iHunterPounceID)
+		{
+			if (IsValidClient(infected))
+			{
+				//Award amounts
+				int i_awardLongPinTime = GetConVarInt(awardLongPinTime)
+				
+				GiveMoney(infected, i_awardLongPinTime)
+				EarningsToConsole(infected, i_awardLongPinTime, "Long Cap Time")
+				CPrintToChat(infected, "{olive}[ECO]{default} You earned: {green}$%i{default} for {red}long cap duration{default}!", i_awardLongPinTime)
+			}
 		}
 	}
 }
@@ -1145,19 +1238,19 @@ static BoomerLandedEvent(Handle:hEvent, const String:name[], bool:dontBroadcast)
 	{
 		new infected = GetClientOfUserId(GetEventInt(hEvent, "attacker"))
 		
-		//Award amounts
-		int i_awardAbilityLanded = GetConVarInt(awardAbilityLanded)
-		
 		if (IsValidClient(infected))
 		{
+			//Award amounts
+			int i_awardAbilityLanded = GetConVarInt(awardAbilityLanded)
+			
 			GiveMoney(infected, i_awardAbilityLanded)
-			EarningsToConsole(infected, i_awardAbilityLanded, "Survivor Capped")
+			EarningsToConsole(infected, i_awardAbilityLanded, "Survivor Boomed")
 			CPrintToChat(infected, "{olive}[ECO]{default} You earned: {green}$%i{default} for {red}booming a survivor{default}!", i_awardAbilityLanded)
 		}
 	}
 }
 
-//Skilled abilities: high pounces (15 damage or more), quad booms, quad charge, triple/quad punch (maybe double too), capping victim witch attacks, tri/quad cap landing
+//Skilled abilities: quad booms, quad charge, triple/quad punch (maybe double too), capping victim witch attacks, tri/quad cap landing
 
 //Fall damage from infected
 static PlayerFalldamageEvent(Handle:hEvent, const String:name[], bool:dontBroadcast)
@@ -1168,9 +1261,6 @@ static PlayerFalldamageEvent(Handle:hEvent, const String:name[], bool:dontBroadc
 		new causer = GetClientOfUserId(GetEventInt(hEvent, "causer"))
 		new damage = GetEventInt(hEvent, "damage")
 		
-		//Award amounts
-		int i_awardSkilledAbilityLanded = GetConVarInt(awardSkilledAbilityLanded)
-		
 		if (damage > 40)
 		{
 			if (GetClientTeam(victim) == teamSurvivor)
@@ -1179,6 +1269,9 @@ static PlayerFalldamageEvent(Handle:hEvent, const String:name[], bool:dontBroadc
 				{
 					if (GetClientTeam(causer) == teamInfected)
 					{
+						//Award amounts
+						int i_awardSkilledAbilityLanded = GetConVarInt(awardSkilledAbilityLanded)
+						
 						GiveMoney(causer, i_awardSkilledAbilityLanded)
 						EarningsToConsole(causer, i_awardSkilledAbilityLanded, "High Fall Damage")
 						CPrintToChat(causer, "{olive}[ECO]{default} You earned: {green}$%i{default} for {red}inflicting fall damage{default}!", i_awardSkilledAbilityLanded)
@@ -1197,19 +1290,42 @@ static PlayerLedgeGrabEvent(Handle:hEvent, const String:name[], bool:dontBroadca
 		new victim = GetClientOfUserId(GetEventInt(hEvent, "userid"))
 		new causer = GetClientOfUserId(GetEventInt(hEvent, "causer"))
 		
-		//Award amounts
-		int i_awardSkilledAbilityLanded = GetConVarInt(awardSkilledAbilityLanded)
-		
 		if (GetClientTeam(victim) == teamSurvivor)
 		{
 			if (IsValidClient(causer))
 			{
 				if (GetClientTeam(causer) == teamInfected)
 				{
+					//Award amounts
+					int i_awardSkilledAbilityLanded = GetConVarInt(awardSkilledAbilityLanded)
+					
 					GiveMoney(causer, i_awardSkilledAbilityLanded)
 					EarningsToConsole(causer, i_awardSkilledAbilityLanded, "Ledge Hang")
 					CPrintToChat(causer, "{olive}[ECO]{default} You earned: {green}$%i{default} for {red}ledge hanging a survivor{default}!", i_awardSkilledAbilityLanded)
 				}
+			}
+		}
+	}
+}
+
+//Multi-charges
+static ChargerImpactEvent(Handle:hEvent, const String:name[], bool:dontBroadcast)
+{
+	if (g_bRoundLive)
+	{
+		new infected = GetClientOfUserId(GetEventInt(hEvent, "userid"))
+		
+		if (IsValidClient(infected))
+		{
+			if (GetClientTeam(infected) == teamInfected)
+			{
+				//Award amounts - Half the standard amount per survivor hit
+				int i_awardSkilledAbilityLanded = GetConVarInt(awardSkilledAbilityLanded)
+				int i_awardSkilledAbilityLanded_MultiCharge = RoundToFloor(float(i_awardSkilledAbilityLanded) / 2)
+				
+				GiveMoney(infected, i_awardSkilledAbilityLanded_MultiCharge)
+				EarningsToConsole(infected, i_awardSkilledAbilityLanded_MultiCharge, "Ledge Hang")
+				CPrintToChat(infected, "{olive}[ECO]{default} You earned: {green}$%i{default} for landing a {red}multi-charge{default}!", i_awardSkilledAbilityLanded_MultiCharge)
 			}
 		}
 	}
@@ -2655,6 +2771,33 @@ stock Action:RemoveMoney_Cmd(int client, int args)
 	return Plugin_Handled;
 }
 
+//Extends buy time by 30 seconds
+stock Action:ExtendBuy_Cmd(int client, int args)
+{    
+	//Extend buy time, if it has ended
+	if (g_bCanBuy == false)
+	{
+		g_bCanBuy = true
+		CreateTimer(30.0, BuyTimeExtendEnd)
+		
+		//Announce to server
+		CPrintToChatAll("{olive}[ECO]{default} {blue}!buy{default} time has been extended by {green}30 seconds{default}!")
+	}
+	else
+	{
+		CPrintToChatAll("{olive}[ECO]{default} {blue}!buy{default} time has not ended yet.")
+	}
+	
+	return Plugin_Handled;
+}
+
+//Disable buy time after an extension
+static Action:BuyTimeExtendEnd(Handle timer)
+{
+	g_bCanBuy = false
+	CPrintToChatAll("{olive}[ECO]{default} Extended {blue}!buy{default} time has ended!")
+}
+
 /*
 	STOCKS
 */
@@ -2766,26 +2909,25 @@ stock int GetVersusProgressDistance(int teamIndex)
 NOTES:
 Ideas:
 money transfer system - send money in fixed amounts to a teammate e.g. $500, $1000
-something to control ammo pile density (e.g. multiply density per map)
-interacting with ammo pile/pill cabinet can let you buy
 detect campaign length, option to have multiplier for shorter/longer than normal campaigns (maybe bonus applied to start money) - dont think this is really needed
 actually if you heal right before end of round u would get extra money - need to fix that - award extra money for having a medkit, but increase medkit price to compensate? or make the hp calculation count unused medkits
-using a medkit could forfeit the health bonus completely
+using a medkit could forfeit the health bonus completely, or holding one gives you green hp bonus (though you could heal someone else with low hp instead for more money)
+fix saferoom door locking to work without issues (doors that use specific spawn flags, also messes up hitbox for some reason)
 
 
 Todo:
 account for round resets (revert money/items back to what it was at start of round), store amount of money at start of round
-pass item price handle through buy function directly instead of calling getitemprice
-dont allow points to be gained or lost for things that happen once round is "finished" i.e. score board shows up
 play sound when round goes live
 add confirmation check if you already have an item in a slot you try to buy for
-change saferoom door locking to account for all cases, for now it is disabled
-print to client console when money is awarded with reason and amount
-command to print teams money
-move standard money to last round
 wait for all players to load in before starting the round
 extra starting money on 2/3 map campaigns
-plugin to make ammo density always at a minimum level
+plugin to make ammo density always at a minimum level/control density
 cvars to control fall damage amount for award
 cvars to control dp damage amount for award
+cvar to control long cap duration for award
+optimization pass
+	-pass item price handle through buy function directly instead of calling getitemprice
+	-initiating variables
+	-overuse of loops
+	-isvalidclient optimizations
 */
