@@ -3,13 +3,14 @@
 #include <sdkhooks>
 #include <colors>
 #include <left4dhooks>
+#include <weapons>
 
 public Plugin:myinfo = 
 {
 	name = "FailzzMod Economy",
 	author = "Derpduck",
 	description = "Prototype for FailzzMod economy system",
-	version = "0.1",
+	version = "1",
 	url = "https://github.com/Derpduck/Derpduck-L4D2-Scripts"
 }
 
@@ -74,11 +75,41 @@ ArrayList g_playerMoney
 #define BUY_MACHETE "#buy_machete"
 #define BUY_PITCHFORK "#buy_pitchfork"
 
+//Enums
+enum
+{
+	teamNone,
+	teamSpectator,
+	teamSurvivor,
+	teamInfected
+}
+
+//Constants
+//const SPAWNFLAGS_IGNORE_USE = 32768
+
 //Variables
 bool g_bCanBuy = false
+bool g_bRoundLive = false
 bool g_bSaferoomLocked = false
 int g_iValidMeleeCount = 0
 new String:g_sValidMelees[16][32]
+int g_iTeamALostCounter = 0
+int g_iTeamBLostCounter = 0
+int g_iAreTeamsFlipped = 0
+int g_iPointsTeamA = 0
+int g_iPointsTeamB = 0
+
+//Track cappers landing and cap duration
+/*
+int g_iChokeSmokerID = 0
+int g_iChokeSmokerTime = 0
+int g_iPounceHunterID = 0
+int g_iPounceHunterTime = 0
+int g_iLatchJockeyID = 0
+int g_iLatchJockeyTime = 0
+int g_iPoundChargerID = 0
+int g_iPoundChargerTime = 0
+*/
 
 /*
 	CONVARS
@@ -89,25 +120,16 @@ ConVar	initialBuyTime, extendedBuyTime;
 //MONEY
 ConVar	startingMoney, maximumMoney;
 
-/*
 //AWARD CONDITIONS
-ConVar	personalWitchKill,
-		personalSurvivorIncap, personalSurvivorKilled,
-		personalAbility, personalSkilledAbility,
-		personalHealth, personalDistance,
-		personalPenaltyIncap, personalPenaltyDeath;
+//ConVar	personalWitchKill, personalHealth;
 
 //AWARD AMOUNTS
-ConVar	awardRoundEnd, awardMapEnd, awardWonMap, awardLostMap, awardConsecutiveLoss, awardExtraConsecutiveLoss,
+ConVar	awardRoundEnd, awardWonMap, awardLostMap, awardConsecutiveLoss, awardExtraConsecutiveLoss,
 		awardKilledTank, awardKilledWitch,
 		awardWipedSurvivors, awardSurvivorIncapped, awardSurvivorKilled,
-		awardAbilityLanded, awardSkilledAbilityLanded, awardCapDuration,
-		awardHealthGreen, awardHealthYellow, awardHealthRed, awardHealthTempOnly, awardDistanceBonus,
-		awardTier1Bonus;
-
-//PENALTY AMOUNTS
-ConVar	penaltyIncapped, penaltyDeath;
-*/
+		awardAbilityLanded, awardSkilledAbilityLanded, awardLongPinTime,
+		awardHealthGreen, awardHealthYellow, awardHealthRed, awardHealthTempOnly, awardDistanceMultiplier;
+		//awardTier1Bonus;
 
 //ITEM PRICES
 ConVar	priceShotgunPump, priceShotgunChrome,
@@ -125,62 +147,100 @@ ConVar	priceLaser, priceFireAmmo, priceExplosiveAmmo;
 ConVar	priceGnome, priceCola;
 */
 
+ConVar economyDebug;
+
 public OnPluginStart()
 {
 	//HOOKS
 	HookEvent("round_start", EventHook:RoundStartEvent, EventHookMode_PostNoCopy)
+	HookEvent("player_death", EventHook:PlayerDeathEvent, EventHookMode_Post)
+	HookEvent("witch_killed", EventHook:WitchKilledEvent, EventHookMode_Post)
+	HookEvent("player_incapacitated", EventHook:PlayerIncappedEvent, EventHookMode_Post)
+	//Infected ability hooks
+	HookEvent("choke_start", EventHook:ChokeStartEvent, EventHookMode_Post)		//Smoker
+	//HookEvent("choke_end", EventHook:ChokeEndEvent, EventHookMode_Post)		//Smoker
+	HookEvent("jockey_ride", EventHook:JockeyRideEvent, EventHookMode_Post) //Jockey
+	HookEvent("charger_pummel_start", EventHook:ChargerPummelStartEvent, EventHookMode_Post) //Charger
+	HookEvent("lunge_pounce", EventHook:HunterPounceEvent, EventHookMode_Post) //Hunter
+	HookEvent("player_now_it", EventHook:BoomerLandedEvent, EventHookMode_Post) //Boomer
+	//Skilled ability additional hooks
+	HookEvent("player_falldamage", EventHook:PlayerFalldamageEvent, EventHookMode_Post)
+	HookEvent("player_ledge_grab", EventHook:PlayerLedgeGrabEvent, EventHookMode_Post)
+	
+	/*
+//GENERIC CAPPER?
+//lunge_pounce
+pounce_end
+pounce_stopped
+ability_use - excludes jockey
+
+//SMOKER
+//"tongue_grab" 
+//"choke_start"
+//choke_end
+
+//CHARGER
+charger_pummel_start
+Event "charger_charge_start" 
+Event "charger_carry_start" 
+Event "charger_carry_end" 
+Event "charger_charge_end" 
+
+//jockey
+Event "jockey_ride" 
+Event "jockey_ride_end" 
+Event "pounce_end" 
+
+*/
+	
+	
+	/* hooks to try
+	player_ledge_grab
+	heal_success
+	*/
+	
+	economyDebug = CreateConVar("economy_debug",				"0",		"Enable some debug prints")
+	
+	//ADMIN COMMANDS
+	RegAdminCmd("givemoney", GiveMoney_Cmd, ADMFLAG_GENERIC, "Gives specified amount of money to player")
+	RegAdminCmd("removemoney", RemoveMoney_Cmd, ADMFLAG_GENERIC, "Removes specified amount of money from player")
 	
 	//CLIENT COMMANDS
 	RegConsoleCmd("buy", Buy_Menu)
-	
-	//@@@ = placeholder
+	RegConsoleCmd("money", Money_Cmd)
 	
 	//BUY TIME
 	initialBuyTime				= CreateConVar("initial_buy_time",				"45",		"Amount of time to buy before the round starts and players are allowed out of the saferoom")
-	extendedBuyTime				= CreateConVar("extended_buy_time",				"15",		"Amount of time allowed to buy items after the round starts")
+	extendedBuyTime				= CreateConVar("extended_buy_time",				"30",		"Amount of time allowed to buy items after the round starts")
 	
 	//MONEY
-	startingMoney				= CreateConVar("starting_money",				"1800",		"Amount of money players start out with upon joining for the first time")
+	startingMoney				= CreateConVar("starting_money",				"1600",		"Amount of money players start out with upon joining for the first time")
 	maximumMoney				= CreateConVar("maximum_money",					"16000",	"Maximum amount of money players are allowed to have") //Placeholder value
 	
-	/*
 	//AWARD CONDITIONS
-	personalWitchKill			= CreateConVar("personal_witch_kill",			"0",		"Is witch killp bonus money awarded to the entire team or individually (0 = Team, 1 = Personal)")
-	personalSurvivorIncap		= CreateConVar("personal_survivor_incap",		"0",		"Is survivor incap bonus money awarded to the entire team or individually (0 = Team, 1 = Personal)")
-	personalSurvivorKilled		= CreateConVar("personal_survivor_kill",		"0",		"Is survivor kill bonus money awarded to the entire team or individually (0 = Team, 1 = Personal)")
-	personalAbility				= CreateConVar("personal_ability",				"1",		"Is ability landing (and cap duration) bonus money awarded to the entire team or individually (0 = Team, 1 = Personal)")
-	personalSkilledAbility		= CreateConVar("personal_skilled_ability",		"1",		"Is skilled ability landing bonus money awarded to the entire team or individually (0 = Team, 1 = Personal)")
-	personalHealth				= CreateConVar("personal_health",				"0",		"Is health bonus money awarded to the entire team or individually (0 = Team, 1 = Personal)")
-	personalDistance			= CreateConVar("personal_distance",				"0",		"Is distance bonus money awarded to the entire team or individually (0 = Team, 1 = Personal)")
-	personalPenaltyIncap		= CreateConVar("personal_penalty_incap",		"1",		"Is incap penalty money taken from the entire team or individually (0 = Team, 1 = Personal)")
-	personalPenaltyDeath		= CreateConVar("personal_penalty_death",		"1",		"Is death penalty money taken from the entire team or individually (0 = Team, 1 = Personal)")
+	//personalWitchKill			= CreateConVar("personal_witch_kill",			"1",		"Is witch kill bonus money awarded to the entire team or individually (0 = Team, 1 = Personal)")
+	//personalHealth				= CreateConVar("personal_health",				"1",		"Is health bonus money awarded to the entire team or individually (0 = Team, 1 = Personal)")
 	
 	//AWARD AMOUNTS
-	awardRoundEnd				= CreateConVar("award_round_end",				"0",		"Money awarded on (half) round end (0 = No Award) [Team]")
-	awardMapEnd					= CreateConVar("award_map_end",					"1800",		"Money awarded on (full) map end (0 = No Award) [Team]")
+	awardRoundEnd				= CreateConVar("award_round_end",				"1600",		"Money awarded to survivors on (half) round end (0 = No Award) [Team]")
 	awardWonMap					= CreateConVar("award_won_map",					"1200",		"Money awarded for winning a map (0 = No Award) [Team]")
 	awardLostMap				= CreateConVar("award_lost_map",				"900",		"Money awarded for losing a map (0 = No Award) [Team]")
-	awardConsecutiveLoss		= CreateConVar("award_consecutive_loss",		"1000",		"Money awarded for losing 2 maps consecutively (0 = No Award) [Team]")
-	awardExtraConsecutiveLoss	= CreateConVar("award_extra_consecutive_loss",	"1100",		"Money awarded for losing more than 2 maps consecutively (0 = No Award) [Team]")
-	awardKilledTank				= CreateConVar("award_killed_tank",				"@@@ 250",	"Money awarded for killing a tank (0 = No Award) [Team]")
-	awardKilledWitch			= CreateConVar("award_killed_witch",			"@@@ 25",	"Money awarded for killing a witch (without her running away/incapping a survivor) (0 = No Award) [Team (default) / Personal]")
-	awardWipedSurvivors			= CreateConVar("award_wiped_survivors",			"@@@ 300",	"Money awarded for killing all the survivors (0 = No Award) [Team]")
-	awardSurvivorIncapped		= CreateConVar("award_survivor_incapped",		"@@@ 10",	"Money awarded each time a survivor is incapped (0 = No Award) [Team (default) / Personal]")
-	awardSurvivorKilled			= CreateConVar("award_survivor_killed",			"@@@ 50",	"Money awarded each time a survivor is killed (0 = No Award) [Team (default) / Personal]")
-	awardAbilityLanded			= CreateConVar("award_ability_landed",			"@@@ 15",	"Money awarded for landing an infected ability (excludes spitter) (0 = No Award) [Team / Personal (default)]")
-	awardSkilledAbilityLanded	= CreateConVar("award_skill_ability_landed",	"@@@ 15",	"Money awarded for landing infected abilities skillfully (e.g. high pounces) (0 = No Award) [Team / Personal (default)]")
-	awardCapDuration			= CreateConVar("award_cap_duration",			"@@@ 5",	"Money awarded for every second a survivor is pinned (0 = No Award) [Team / Personal (default)]")
-	awardHealthGreen			= CreateConVar("award_health_green",			"@@@ 100",	"Money awarded for each survivor that completes the map with green health (0 = No Award) [Team (default) / Personal]")
-	awardHealthYellow			= CreateConVar("award_health_yellow",			"@@@ 60",	"Money awarded for each survivor that completes the map with yellow health (0 = No Award) [Team (default) / Personal]")
-	awardHealthRed				= CreateConVar("award_health_red",				"@@@ 30",	"Money awarded for each survivor that completes the map with red health (0 = No Award) [Team (default) / Personal]")
-	awardHealthTempOnly			= CreateConVar("award_health_temp_only",		"@@@ 20",	"Money awarded for each survivor that completes the map with only temporary health (0 = No Award) [Team (default) / Personal]")
-	awardDistanceBonus			= CreateConVar("award_distance_bonus",			"@@@ 1",	"Multiplier of distance points for money awarded (0 = No Award) [Team (default) / Personal]")
-	awardTier1Bonus				= CreateConVar("award_tier1_bonus",				"@@@ 200",	"Money awarded for each tier 1 weapon the survivors have when reaching the saferoom (0 = No Award) [Team / Personal (default)]")
-	
-	//PENALTY AMOUNTS
-	penaltyIncapped				= CreateConVar("penalty_incapped",				"@@@ 25",	"Money lost for being incapped (0 = No Penalty) [Team / Personal (default)]")
-	penaltyDeath				= CreateConVar("penalty_death",					"@@@ 0",	"Money lost for being killed as a survivor (0 = No Penalty) [Team / Personal (default)]")
-	*/
+	awardConsecutiveLoss		= CreateConVar("award_consecutive_loss",		"1000",		"Extra money awarded for losing 2 maps consecutively (0 = No Award) [Team]")
+	awardExtraConsecutiveLoss	= CreateConVar("award_extra_consecutive_loss",	"1100",		"Extra money awarded for losing 3 or more maps consecutively (0 = No Award) [Team]")
+	awardKilledTank				= CreateConVar("award_killed_tank",				"250",		"Money awarded for killing a tank (0 = No Award) [Team]") //Placeholder value
+	awardKilledWitch			= CreateConVar("award_killed_witch",			"100",		"Money awarded for killing a witch in 1 shot (0 = No Award) [Team / Personal (default)]") //Placeholder value
+	awardWipedSurvivors			= CreateConVar("award_wiped_survivors",			"300",		"Money awarded for killing all the survivors (0 = No Award) [Team]") //Placeholder value
+	awardSurvivorIncapped		= CreateConVar("award_survivor_incapped",		"25",		"Money awarded each time a survivor is incapped (0 = No Award) [Personal]") //Placeholder value
+	awardSurvivorKilled			= CreateConVar("award_survivor_killed",			"50",		"Money awarded each time a survivor is killed (0 = No Award) [Personal]") //Placeholder value
+	awardAbilityLanded			= CreateConVar("award_ability_landed",			"10",		"Money awarded for landing an infected ability (excludes spitter) (0 = No Award) [Personal]") //Placeholder value
+	awardSkilledAbilityLanded	= CreateConVar("award_skill_ability_landed",	"10",		"Money awarded for landing infected abilities skillfully (0 = No Award) [Personal]") //Placeholder value
+	awardLongPinTime			= CreateConVar("award_long_pin_time",			"20",		"Money awarded for pinning a survivor for more than 5 seconds (0 = No Award) [Personal]") //Placeholder value
+	awardHealthGreen			= CreateConVar("award_health_green",			"100",		"Money awarded for each survivor that completes the map with green health (0 = No Award) [Team / Personal (default)]") //Placeholder value
+	awardHealthYellow			= CreateConVar("award_health_yellow",			"60",		"Money awarded for each survivor that completes the map with yellow health (0 = No Award) [Team / Personal (default)]") //Placeholder value
+	awardHealthRed				= CreateConVar("award_health_red",				"30",		"Money awarded for each survivor that completes the map with red health (0 = No Award) [Team / Personal (default)]") //Placeholder value
+	awardHealthTempOnly			= CreateConVar("award_health_temp_only",		"20",		"Money awarded for each survivor that completes the map with only temporary health (0 = No Award) [Team / Personal (default)]") //Placeholder value
+	awardDistanceMultiplier		= CreateConVar("award_distance_multiplier",		"0.25",		"Multiplier of distance points for money awarded (0 = No Award)") //Placeholder value
+	//awardTier1Bonus				= CreateConVar("award_tier1_bonus",				"100",		"Money awarded for each tier 1 weapon the survivors have when reaching the saferoom (0 = No Award) [Team / Personal (default)]") //Placeholder value
 	
 	//ITEM PRICES
 	//Shotguns
@@ -190,41 +250,41 @@ public OnPluginStart()
 	priceShotgunSpas			= CreateConVar("price_shotgun_spas",			"2300",		"Cost of weapon: shotgun_spas")
 	//Uzis
 	priceUzi					= CreateConVar("price_uzi",						"1050",		"Cost of weapon: smg")
-	priceUziSilenced			= CreateConVar("price_uzi_silenced",			"1250",		"Cost of weapon: smg_silenced")
-	priceUziMP5					= CreateConVar("price_uzi_mp5",					"1650",		"Cost of weapon: smg_mp5")
+	priceUziSilenced			= CreateConVar("price_uzi_silenced",			"1150",		"Cost of weapon: smg_silenced")
+	priceUziMP5					= CreateConVar("price_uzi_mp5",					"1200",		"Cost of weapon: smg_mp5")
 	//Rifles
-	priceRifleM16				= CreateConVar("price_rifle_m16",				"2500",		"Cost of weapon: rifle")
-	priceRifleAK47				= CreateConVar("price_rifle_ak47",				"2700",		"Cost of weapon: rifle_ak47")
-	priceRifleDesert			= CreateConVar("price_rifle_desert",			"1800",		"Cost of weapon: rifle_desert")
-	priceRifleSG552				= CreateConVar("price_rifle_sg552",				"3000",		"Cost of weapon: rifle_sg552")
+	priceRifleM16				= CreateConVar("price_rifle_m16",				"2900",		"Cost of weapon: rifle")
+	priceRifleAK47				= CreateConVar("price_rifle_ak47",				"2500",		"Cost of weapon: rifle_ak47")
+	priceRifleDesert			= CreateConVar("price_rifle_desert",			"2050",		"Cost of weapon: rifle_desert")
+	priceRifleSG552				= CreateConVar("price_rifle_sg552",				"3100",		"Cost of weapon: rifle_sg552")
 	//Snipers
 	priceSniperHunting			= CreateConVar("price_sniper_hunting",			"4500",		"Cost of weapon: hunting_rifle")
 	priceSniperMilitary			= CreateConVar("price_sniper_military",			"4750",		"Cost of weapon: sniper_military")
 	priceSniperScout			= CreateConVar("price_sniper_scout",			"1700",		"Cost of weapon: sniper_scout")
-	priceSniperAWP				= CreateConVar("price_sniper_awp",				"4250",		"Cost of weapon: sniper_awp")
+	priceSniperAWP				= CreateConVar("price_sniper_awp",				"4200",		"Cost of weapon: sniper_awp")
 	//Heavy Weaopns
 	priceM60					= CreateConVar("price_m60",						"4500",		"Cost of weapon: rifle_m60") //Placeholder value
-	priceGrenadeLauncher		= CreateConVar("price_grenade_launcher",		"8000",		"Cost of weapon: grenade_launcher") //Placeholder value
-	priceChainsaw				= CreateConVar("price_chainsaw",				"5000",		"Cost of weapon: chainsaw") //Placeholder value
+	priceGrenadeLauncher		= CreateConVar("price_grenade_launcher",		"16000",		"Cost of weapon: grenade_launcher") //Placeholder value
+	priceChainsaw				= CreateConVar("price_chainsaw",				"16000",		"Cost of weapon: chainsaw") //Placeholder value
 	//Secondaries
-	pricePistol					= CreateConVar("price_pistol",					"400",		"Cost of weapon: pistol (per pistol)")
+	pricePistol					= CreateConVar("price_pistol",					"250",		"Cost of weapon: pistol (per pistol)")
 	priceMagnum					= CreateConVar("price_pistol_magnum",			"700",		"Cost of weapon: pistol_magnum")
 	priceMeleeBlunt				= CreateConVar("price_melee_blunt",				"500",		"Cost of weapon(s): baseball_bat, cricket_bat, electric_guitar, frying_pan, golfclub, shovel, tonfa")
 	priceMeleeSharp				= CreateConVar("price_melee_sharp",				"700",		"Cost of weapon(s): crowbar, fireaxe, katana, knife, machete, pitchfork")
 	//Throwables
-	priceMolotov				= CreateConVar("price_molotov",					"200",		"Cost of weapon: molotov")
-	pricePipebomb				= CreateConVar("price_pipe_bomb",				"300",		"Cost of weapon: pipe_bomb")
+	priceMolotov				= CreateConVar("price_molotov",					"300",		"Cost of weapon: molotov")
+	pricePipebomb				= CreateConVar("price_pipe_bomb",				"400",		"Cost of weapon: pipe_bomb")
 	priceBilebomb				= CreateConVar("price_bile_bomb",				"600",		"Cost of weapon: vomitjar")
 	//Healing Items
 	pricePainPills				= CreateConVar("price_pain_pills",				"400",		"Cost of weapon: pain_pills")
 	priceAdrenaline				= CreateConVar("price_adrenaline",				"650",		"Cost of weapon: adrenaline")
-	priceMedkit					= CreateConVar("price_medkit",					"1200",		"Cost of weapon: first_aid_kit")
+	priceMedkit					= CreateConVar("price_medkit",					"1000",		"Cost of weapon: first_aid_kit")
 	priceDefibrillator			= CreateConVar("price_defibrillator",			"1550",		"Cost of weapon: defibrillator")
 	/*
 	//Upgrades
-	priceLaser					= CreateConVar("price_laser",					"@@@ 2500",	"Cost of upgrade: laser sights")
-	priceFireAmmo				= CreateConVar("price_fire_ammo",				"@@@ 3000",	"Cost of upgrade: upgradepack_incendiary")
-	priceExplosiveAmmo			= CreateConVar("price_explosive_ammo",			"@@@ 5000",	"Cost of upgrade: upgradepack_explosive")
+	priceLaser					= CreateConVar("price_laser",					"2500",	"Cost of upgrade: laser sights") //Placeholder value
+	priceFireAmmo				= CreateConVar("price_fire_ammo",				"3000",	"Cost of upgrade: upgradepack_incendiary") //Placeholder value
+	priceExplosiveAmmo			= CreateConVar("price_explosive_ammo",			"5000",	"Cost of upgrade: upgradepack_explosive") //Placeholder value
 	//Fun
 	priceGnome					= CreateConVar("price_gnome",					"50",		"Cost of item: gnome")
 	priceCola					= CreateConVar("price_cola",					"50",		"Cost of item: cola_bottles")
@@ -235,8 +295,6 @@ public OnPluginStart()
 	g_playerMoney = new ArrayList(AUTH_ADT_LENGTH)
 	g_steamIDs.Clear()
 	g_playerMoney.Clear()
-	
-	CreateTimer(10.0, test)
 }
 
 //Return valid melee's for current campaign
@@ -249,13 +307,6 @@ static GetValidMelees()
 	{
 		ReadStringTable(tableValidMelees, i, g_sValidMelees[i], 32)
 	}
-}
-
-static Action:test(Handle timer)
-{
-	GiveMoney(1, 500)
-	
-	CreateTimer(10.0, test)
 }
 
 /*
@@ -287,7 +338,7 @@ static AddClientToList(client)
 		}
 		
 		//Show menu if client is survivor
-		if (GetClientTeam(client) == 2)
+		if (GetClientTeam(client) == teamSurvivor)
 		{
 			if (g_bCanBuy)
 			{
@@ -330,8 +381,9 @@ static Action:BuyMenuAutoShow(Handle timer, client)
 static RoundStartEvent(Handle:event, const String:name[], bool:dontBroadcast)
 {
 	g_bCanBuy = false
+	g_bRoundLive = false
 	GetValidMelees()
-	CreateTimer(10.0, RoundStartEvent_Delay)
+	CreateTimer(15.0, RoundStartEvent_Delay)
 	
 	LockSaferoom()
 }
@@ -339,14 +391,36 @@ static RoundStartEvent(Handle:event, const String:name[], bool:dontBroadcast)
 //Round start event on delay
 static Action:RoundStartEvent_Delay(Handle timer)
 {
-	//Check if a new game has started (both teams have 0 points)
-	int pointsTeamA = L4D2Direct_GetVSCampaignScore(0)
-	int pointsTeamB = L4D2Direct_GetVSCampaignScore(1)
+	g_iAreTeamsFlipped = AreTeamsFlipped()
+	int isSecondHalf = InSecondHalfOfRound()
 	
-	if (pointsTeamA == 0 && pointsTeamB == 0)
+	g_iPointsTeamA = 0
+	g_iPointsTeamB = 0
+	
+	/*
+	g_iChokeSmokerID = 0
+	g_iChokeSmokerTime = 0
+	g_iPounceHunterID = 0
+	g_iPounceHunterTime = 0
+	g_iLatchJockeyID = 0
+	g_iLatchJockeyTime = 0
+	g_iPoundChargerID = 0
+	g_iPoundChargerTime = 0
+	*/
+	
+	//Check if a new game has started (both teams have 0 points)
+	if (isSecondHalf)
 	{
-		//Reset all money
-		ResetMoney()
+		int pointsTeamA = L4D2Direct_GetVSCampaignScore(0)
+		int pointsTeamB = L4D2Direct_GetVSCampaignScore(1)
+		
+		if (pointsTeamA == 0 && pointsTeamB == 0)
+		{
+			//Reset all money
+			ResetMoney()
+			g_iTeamALostCounter = 0
+			g_iTeamBLostCounter = 0
+		}
 	}
 	
 	//Enable buying and create menu for survivors
@@ -362,29 +436,29 @@ static Action:RoundStartEvent_Delay(Handle timer)
 	{
 		if (IsValidClient(i))
 		{
-			if (GetClientTeam(i) == 2)
+			if (GetClientTeam(i) == teamSurvivor)
 			{
 				OpenBuyMenu(i)
-				PrintSurvivorFunds(i)
+				PrintTeamFunds(i, teamSurvivor)
 			}
 		}
 	}
 }
 
-//Print survivor team's money to chat on round start (only for survivors)
-static PrintSurvivorFunds(client)
+//Print team's money to chat
+static PrintTeamFunds(client, int team)
 {
 	decl String:name[MAX_NAME_LENGTH]
 	GetClientName(client, name, sizeof(name))
 	int clientMoney = GetMoney(client)
-	CPrintToChat(client, "{olive}[ECO]{default} {blue}%s: {green}%i{default}.", name, clientMoney)
+	CPrintToChat(client, "{olive}[ECO]{default} {blue}%s{default}: {green}$%i", name, clientMoney)
 	
 	//Go through players and print other survivors
 	for (new i = 1; i <= MaxClients; i++)
 	{
 		if (IsValidClient(i))
 		{
-			if (GetClientTeam(i) == 2)
+			if (GetClientTeam(i) == team)
 			{
 				if (i != client)
 				{
@@ -397,20 +471,48 @@ static PrintSurvivorFunds(client)
 	}
 }
 
+static Action:Money_Cmd(int client, int args)
+{
+	PrintTeamFunds(client, GetClientTeam(client))
+}
+
 //Open saferooms
 static Action:EndLockTime(Handle timer)
 {
+	g_bRoundLive = true
 	UnlockSaferoom()
+	
+	for (new i = 1; i <= MaxClients; i++)
+	{
+		if (IsValidClient(i))
+		{
+			if (GetClientTeam(i) == teamSurvivor)
+			{
+				ReturnSurvivorToSaferoom(i, false)
+			}
+		}
+	}
 	
 	//Allow buying for specified time after unlocking saferoom
 	int extraBuyTime = GetConVarInt(extendedBuyTime)
 	CreateTimer(float(extraBuyTime), EndBuyTime)
+	CPrintToChatAll("{olive}[ECO]{default} Round is live! {green}%i{default} seconds left to {blue}!buy{default}.", extraBuyTime)
 }
 
 //End buy time
 static Action:EndBuyTime(Handle timer)
 {
 	g_bCanBuy = false
+	
+	//If player is a bot once buy time expires, give them some items
+	for (new i = 1; i <= MaxClients; i++)
+	{
+		if (IsSurvivorBot(i))
+		{
+			//Basic T1 loadout
+			BotBuyItems(i, 0)
+		}
+	}
 }
 
 //Completely reset money tracking, re-add all currently loaded clients
@@ -429,6 +531,71 @@ static ResetMoney()
 	}
 }
 
+//Give bots a random T1 and pills
+static BotBuyItems(int client, int loadoutType = 0)
+{
+	//T1 loadout
+	switch(loadoutType)
+	{
+		//Basic T1 loadout
+		case 0:
+		{
+			//Pick a random T1 weapon to give
+			int randomChoose = GetRandomInt(0, 3)
+			switch(randomChoose)
+			{
+				case 0:
+				{
+					GiveClientItem(client, "smg")
+				}
+				case 1:
+				{
+					GiveClientItem(client, "smg_silenced")
+				}
+				case 2:
+				{
+					GiveClientItem(client, "pumpshotgun")
+				}
+				case 3:
+				{
+					GiveClientItem(client, "shotgun_chrome")
+				}
+			}
+			
+			//Give pills
+			GiveClientItem(client, "pain_pills")
+		}
+		//T1 with medkit
+		case 1:
+		{
+			//Pick a random T1 weapon to give
+			int randomChoose = GetRandomInt(0, 3)
+			switch(randomChoose)
+			{
+				case 0:
+				{
+					GiveClientItem(client, "smg")
+				}
+				case 1:
+				{
+					GiveClientItem(client, "smg_silenced")
+				}
+				case 2:
+				{
+					GiveClientItem(client, "pumpshotgun")
+				}
+				case 3:
+				{
+					GiveClientItem(client, "shotgun_chrome")
+				}
+			}
+			
+			//Give medkit
+			GiveClientItem(client, "first_aid_kit")
+		}
+	}
+}
+
 /*
 	BUY TIME
 */
@@ -437,12 +604,20 @@ static LockSaferoom()
 {
 	g_bSaferoomLocked = true
 	
+	/*
 	new saferoomDoor = -1
 	while ((saferoomDoor = FindEntityByClassname(saferoomDoor, "prop_door_rotating_checkpoint")) != -1)
 	{
-		SetVariantString("spawnflags 32768")
-		AcceptEntityInput(saferoomDoor, "AddOutput")
+		int iFlags = GetEntProp(saferoomDoor, Prop_Data, "m_spawnflags")
+		int newFlags = iFlags + SPAWNFLAGS_IGNORE_USE
+		PrintToChatAll("%i", iFlags)
+		char[64] flagsString
+		Format(flagsString, sizeof(flagsString), "", money)
+		
+		//SetVariantString("spawnflags 32768")
+		//AcceptEntityInput(saferoomDoor, "AddOutput")
 	}
+	*/
 }
 
 //Unlock saferoom doors
@@ -450,16 +625,20 @@ static UnlockSaferoom()
 {
 	g_bSaferoomLocked = false
 	
+	/*
 	new saferoomDoor = -1
 	while ((saferoomDoor = FindEntityByClassname(saferoomDoor, "prop_door_rotating_checkpoint")) != -1)
 	{
-		SetVariantString("spawnflags 8192")
-		AcceptEntityInput(saferoomDoor, "AddOutput")
+		int iFlags = GetEntProp(saferoomDoor, Prop_Data, "m_spawnflags")
+		PrintToChatAll("%i", iFlags)
+		//SetVariantString("spawnflags 8192")
+		//AcceptEntityInput(saferoomDoor, "AddOutput")
 	}
+	*/
 }
 
 //Prevent survivors from leaving saferoom during buy time
-public Action L4D_OnFirstSurvivorLeftSafeArea(int client)
+public Action:L4D_OnFirstSurvivorLeftSafeArea(int client)
 {
 	if (g_bSaferoomLocked)
 	{
@@ -496,8 +675,550 @@ static ReturnSurvivorToSaferoom(client, bool flagsSet = true)
 }
 
 /*
-	MONEY
+	MONEY EVENTS
 */
+//End of (half) round
+public Action:L4D2_OnEndVersusModeRound(bool:countSurvivors)
+{
+	g_bRoundLive = false
+	
+	//Delay to allow for scores to be updated
+	CreateTimer(2.0, RoundEndEvent_Delay)
+}
+
+//Delayed round end function to allow scores to update
+static Action:RoundEndEvent_Delay(Handle timer)
+{
+	int isSecondHalf = InSecondHalfOfRound()
+	int aliveSurvivors = GetUprightSurvivors()
+	
+	//Award amounts
+	int i_awardRoundEnd = GetConVarInt(awardRoundEnd)
+	int i_awardWonMap = GetConVarInt(awardWonMap)
+	int i_awardLostMap = GetConVarInt(awardLostMap)
+	int i_awardConsecutiveLoss = GetConVarInt(awardConsecutiveLoss)
+	int i_awardExtraConsecutiveLoss = GetConVarInt(awardExtraConsecutiveLoss)
+	int i_awardWipedSurvivors = GetConVarInt(awardWipedSurvivors)
+	int i_awardHealthGreen = GetConVarInt(awardHealthGreen)
+	int i_awardHealthYellow = GetConVarInt(awardHealthYellow)
+	int i_awardHealthRed = GetConVarInt(awardHealthRed)
+	int i_awardHealthTempOnly = GetConVarInt(awardHealthTempOnly)
+	float f_awardDistanceMultiplier = GetConVarFloat(awardDistanceMultiplier)
+	//int i_awardTier1Bonus = GetConVarInt(awardTier1Bonus)
+	
+	//Team scores
+	int teamA = teamSurvivor
+	int teamB = teamInfected
+	int distancePointsTeamA = 0
+	int distancePointsTeamB = 0
+	int teamATotalAward = 0
+	int teamBTotalAward = 0
+	
+	//Account for team flipping
+	if (g_iAreTeamsFlipped == 1)
+	{
+		teamA = teamInfected
+		teamB = teamSurvivor
+	}
+	
+	//HALF ROUND END AWARDS
+	if (teamA == teamSurvivor)
+	{
+		//Award distance points
+		distancePointsTeamA = RoundToCeil(GetVersusProgressDistance(0) * f_awardDistanceMultiplier)
+		AwardTeam(teamA, distancePointsTeamA, "Distance Points")
+		teamATotalAward += distancePointsTeamA
+		
+		//Save points earned this map
+		g_iPointsTeamA = L4D_GetTeamScore(1, false)
+	}
+	else if (teamB == teamSurvivor)
+	{
+		//Award distance points
+		distancePointsTeamB = RoundToCeil(GetVersusProgressDistance(1) * f_awardDistanceMultiplier)
+		AwardTeam(teamB, distancePointsTeamB, "Distance Points")
+		teamBTotalAward += distancePointsTeamB
+		
+		//Save points earned this map
+		g_iPointsTeamB = L4D_GetTeamScore(2, false)
+	}
+	
+	//Survivor team wiped, award infected
+	if (aliveSurvivors == 0)
+	{
+		if (teamA == teamInfected)
+		{
+			AwardTeam(teamA, i_awardWipedSurvivors, "Wiping Survivors")
+			teamATotalAward += i_awardWipedSurvivors
+		}
+		else
+		{
+			AwardTeam(teamB, i_awardWipedSurvivors, "Wiping Survivors")
+			teamBTotalAward += i_awardWipedSurvivors
+		}
+	}
+	
+	//MAP END AWARDS
+	//Determine which team won the map overall, award win/loss bonuses to respective teams
+	if (isSecondHalf == 1)
+	{
+		//Award base amount to both teams
+		AwardTeam(teamA, i_awardRoundEnd, "Round End")
+		teamATotalAward += i_awardRoundEnd
+		AwardTeam(teamB, i_awardRoundEnd, "Round End")
+		teamBTotalAward += i_awardRoundEnd
+		
+		//Team A won
+		if (g_iPointsTeamA > g_iPointsTeamB)
+		{
+			//Win award
+			AwardTeam(teamA, i_awardWonMap, "Winning Map")
+			teamATotalAward += i_awardWonMap
+			
+			g_iTeamALostCounter = 0
+			g_iTeamBLostCounter++
+			
+			//Loss award
+			switch(g_iTeamBLostCounter)
+			{
+				//1st loss
+				case 1:
+				{
+					AwardTeam(teamB, i_awardLostMap, "Losing Map")
+					teamBTotalAward += i_awardLostMap
+				}
+				//2nd loss in a row
+				case 2:
+				{
+					AwardTeam(teamB, i_awardConsecutiveLoss, "Consecutive Map Loss")
+					teamBTotalAward += i_awardConsecutiveLoss
+				}
+				//3rd+ loss in a row
+				default:
+				{
+					AwardTeam(teamB, i_awardExtraConsecutiveLoss, "Multiple Consecutive Map Loss")
+					teamBTotalAward += i_awardExtraConsecutiveLoss
+				}
+			}
+		}
+		//Team B won
+		else if (g_iPointsTeamA < g_iPointsTeamB)
+		{
+			//Win award
+			AwardTeam(teamB, i_awardWonMap, "Winning Map")
+			teamBTotalAward += i_awardWonMap
+			
+			g_iTeamBLostCounter = 0
+			g_iTeamALostCounter++
+			
+			//Loss award
+			switch(g_iTeamALostCounter)
+			{
+				//1st loss
+				case 1:
+				{
+					AwardTeam(teamA, i_awardLostMap, "Losing Map")
+					teamATotalAward += i_awardLostMap
+				}
+				//2nd loss in a row
+				case 2:
+				{
+					AwardTeam(teamA, i_awardConsecutiveLoss, "Consecutive Map Loss")
+					teamATotalAward += i_awardConsecutiveLoss
+				}
+				//3rd+ loss in a row
+				default:
+				{
+					AwardTeam(teamA, i_awardExtraConsecutiveLoss, "Multiple Consecutive Map Loss")
+					teamATotalAward += i_awardExtraConsecutiveLoss
+				}
+			}
+		}
+		//Tie
+		else
+		{
+			AwardTeam(teamA, i_awardWonMap, "Tied Map")
+			AwardTeam(teamB, i_awardWonMap, "Tied Map")
+			teamATotalAward += i_awardWonMap
+			teamBTotalAward += i_awardWonMap
+			
+			g_iTeamALostCounter = 0
+			g_iTeamBLostCounter = 0
+		}
+	}
+	
+	//Print team earnings
+	PrintEarningsTeam(teamA, teamATotalAward, 0, isSecondHalf, g_iTeamALostCounter)
+	PrintEarningsTeam(teamB, teamBTotalAward, 0, isSecondHalf, g_iTeamBLostCounter)
+	
+	//Reset earnings tracker
+	teamATotalAward = 0
+	teamBTotalAward = 0
+	
+	//PERSONAL AWARDS
+	//Go through all clients
+	for (new i = 1; i <= MaxClients; i++)
+	{
+		if (IsValidClient(i))
+		{
+			int personalBonus = 0
+			
+			//Survivor awards
+			if (GetClientTeam(i) == teamSurvivor)
+			{
+				if (aliveSurvivors > 0)
+				{
+					//Finished the map with a T1
+					/*
+					int weponSlot = GetSlotFromWeaponId(view_as<WeaponId>(0))
+					int playerWeapon = GetPlayerWeaponSlot(i, weponSlot)
+					int playerWepid = view_as<int>(IdentifyWeapon(playerWeapon))
+					
+					if (playerWepid == WEPID_SMG || playerWepid == WEPID_SMG_SILENCED || playerWepid == WEPID_SMG_MP5 || playerWepid == WEPID_PUMPSHOTGUN || playerWepid == WEPID_SHOTGUN_CHROME)
+					{
+						GiveMoney(i, i_awardTier1Bonus, "Tier 1 Weapon")
+						personalBonus += i_awardTier1Bonus
+					}
+					*/
+					
+					//Bonus based on health
+					if (IsPlayerAlive(i) && !IsPlayerIncap(i) && !IsPlayerLedged(i))
+					{
+						int permaHealth = GetSurvivorPermanentHealth(i)
+						//int tempHealth = GetSurvivorTemporaryHealth(i)
+						
+						if (permaHealth == 0)
+						{
+							GiveMoney(i, i_awardHealthTempOnly)
+							personalBonus += i_awardHealthTempOnly
+							EarningsToConsole(i, i_awardHealthTempOnly, "Only Temporary Health")
+						}
+						else if (permaHealth <= 24)
+						{
+							GiveMoney(i, i_awardHealthRed)
+							personalBonus += i_awardHealthRed
+							EarningsToConsole(i, i_awardHealthRed, "Red Health")
+						}
+						else if (permaHealth <= 39)
+						{
+							GiveMoney(i, i_awardHealthYellow)
+							personalBonus += i_awardHealthYellow
+							EarningsToConsole(i, i_awardHealthYellow, "Orange Health")
+						}
+						else
+						{
+							GiveMoney(i, i_awardHealthGreen)
+							personalBonus += i_awardHealthGreen
+							EarningsToConsole(i, i_awardHealthGreen, "Green Health")
+						}
+					}
+				}
+			}
+			
+			if (personalBonus > 0)
+			{
+				CPrintToChat(i, "{olive}[ECO]{default} You earned: {green}$%i{default} personal bonus money!", personalBonus)
+			}
+		}
+	}
+}
+
+//Awards related to players dying
+static Action:PlayerDeathEvent(Handle:hEvent, const String:name[], bool:dontBroadcast)
+{
+	if (g_bRoundLive)
+	{
+		new victim = GetClientOfUserId(GetEventInt(hEvent, "userid"))
+		new attacker = GetClientOfUserId(GetEventInt(hEvent, "attacker"))
+		char s_victimName[64]
+		GetEventString(hEvent, "victimname", s_victimName, sizeof(s_victimName))
+		
+		char s_atkname[64]
+		GetEventString(hEvent, "attackername", s_atkname, sizeof(s_atkname))
+		if (GetConVarInt(economyDebug) == 1)
+		{
+			PrintToChatAll("DEBUG PLAYER DEATH: attacker id: %i, infected name: %s",attacker,s_atkname)
+		}
+		
+		//Award amounts
+		int i_awardKilledTank = GetConVarInt(awardKilledTank)
+		int i_awardSurvivorKilled = GetConVarInt(awardSurvivorKilled)
+		
+		//Tank killed, award survivors
+		if (StrEqual(s_victimName, "Tank", false))
+		{
+			AwardTeam(teamSurvivor, i_awardKilledTank, "Killed Tank")
+			PrintEarningsTeam(teamSurvivor, i_awardKilledTank, 1)
+		}
+		
+		//Survivor killed, award the infected that killed them
+		if (GetClientTeam(victim) == teamSurvivor)
+		{
+			//For SOME reason the attacker is set to userid 0 with certain SI
+			if (IsValidClient(attacker))
+			{
+				if (GetClientTeam(attacker) == teamInfected)
+				{
+					GiveMoney(attacker, i_awardSurvivorKilled)
+					EarningsToConsole(attacker, i_awardSurvivorKilled, "Killed Survivor")
+					CPrintToChat(attacker, "{olive}[ECO]{default} You earned: {green}$%i{default} for {red}killing a survivor{default}!", i_awardSurvivorKilled)
+				}
+			}
+			//We don't know who killed the survivor, so award all infected equally
+			else
+			{
+				int i_awardSurvivorKilled_Unknown = RoundToFloor(float(i_awardSurvivorKilled) / 4)
+				AwardTeam(teamInfected, i_awardSurvivorKilled_Unknown, "Survivor Killed [Unknown Killer]")
+				PrintEarningsTeam(teamInfected, i_awardSurvivorKilled_Unknown, 2)
+			}
+		}
+	}
+}
+
+//Awards when a witch is killed
+static WitchKilledEvent(Handle:hEvent, const String:name[], bool:dontBroadcast)
+{
+	if (g_bRoundLive)
+	{
+		new killer = GetClientOfUserId(GetEventInt(hEvent, "userid"))
+		new fullCrown = GetEventBool(hEvent, "oneshot")
+		
+		//Award amounts
+		int i_awardKilledWitch = GetConVarInt(awardKilledWitch)
+		
+		//Only award 1-shot crowns
+		if (fullCrown)
+		{
+			//Witch killed successfully, award the survivor that crowned her
+			if (IsValidClient(killer))
+			{
+				if (GetClientTeam(killer) == teamSurvivor)
+				{
+					GiveMoney(killer, i_awardKilledWitch)
+					EarningsToConsole(killer, i_awardKilledWitch, "Crowned Witch")
+					CPrintToChat(killer, "{olive}[ECO]{default} You earned: {green}$%i{default} for {blue}crowning the witch{default}!", i_awardKilledWitch)
+				}
+			}
+		}
+	}
+}
+
+//Awards when a player is incapped
+static PlayerIncappedEvent(Handle:hEvent, const String:name[], bool:dontBroadcast)
+{
+	if (g_bRoundLive)
+	{
+		new victim = GetClientOfUserId(GetEventInt(hEvent, "userid"))
+		new attacker = GetClientOfUserId(GetEventInt(hEvent, "attacker"))
+		
+		//Award amounts
+		int i_awardSurvivorIncapped = GetConVarInt(awardSurvivorIncapped)
+		
+		if (GetClientTeam(victim) == teamSurvivor)
+		{
+			if (IsValidClient(attacker))
+			{
+				if (GetClientTeam(attacker) == teamInfected)
+				{
+					GiveMoney(attacker, i_awardSurvivorIncapped)
+					EarningsToConsole(attacker, i_awardSurvivorIncapped, "Survivor Incapped")
+					CPrintToChat(attacker, "{olive}[ECO]{default} You earned: {green}$%i{default} for {red}incapping a survivor{default}!", i_awardSurvivorIncapped)
+				}
+			}
+		}
+	}
+}
+
+//INFECTED ABILITY AWARDS
+//awardAbilityLanded
+//awardSkilledAbilityLanded
+//awardLongPinTime
+/*
+g_iChokeSmokerID = 0
+g_iChokeSmokerTime = 0
+g_iPounceHunterID = 0
+g_iPounceHunterTime = 0
+g_iLatchJockeyID = 0
+g_iLatchJockeyTime = 0
+g_iPoundChargerID = 0
+g_iPoundChargerTime = 0
+*/
+
+//Smoker
+static ChokeStartEvent(Handle:hEvent, const String:name[], bool:dontBroadcast)
+{
+	if (g_bRoundLive)
+	{
+		new infected = GetClientOfUserId(GetEventInt(hEvent, "userid"))
+		
+		//Award amounts
+		int i_awardAbilityLanded = GetConVarInt(awardAbilityLanded)
+		
+		if (IsValidClient(infected))
+		{
+			//Only supports 1 smoker at a time
+			//g_iChokeSmokerID = smoker
+			//g_iChokeSmokerTime = 0
+			GiveMoney(infected, i_awardAbilityLanded)
+			EarningsToConsole(infected, i_awardAbilityLanded, "Survivor Capped")
+			CPrintToChat(infected, "{olive}[ECO]{default} You earned: {green}$%i{default} for {red}capping a survivor{default}!", i_awardAbilityLanded)
+		}
+	}
+}
+/*
+static ChokeEndEvent(Handle:hEvent, const String:name[], bool:dontBroadcast)
+{
+	if (g_bRoundLive)
+	{
+		new smoker = GetClientOfUserId(GetEventInt(hEvent, "userid"))
+		if (IsValidClient(smoker))
+		{
+			//Only supports 1 smoker at a time
+			g_iChokeSmokerID = smoker
+			g_iChokeSmokerTime = 0
+		}
+	}
+}
+*/
+
+//Jockey
+static JockeyRideEvent(Handle:hEvent, const String:name[], bool:dontBroadcast)
+{
+	if (g_bRoundLive)
+	{
+		new infected = GetClientOfUserId(GetEventInt(hEvent, "userid"))
+		
+		//Award amounts
+		int i_awardAbilityLanded = GetConVarInt(awardAbilityLanded)
+		
+		if (IsValidClient(infected))
+		{
+			GiveMoney(infected, i_awardAbilityLanded)
+			EarningsToConsole(infected, i_awardAbilityLanded, "Survivor Capped")
+			CPrintToChat(infected, "{olive}[ECO]{default} You earned: {green}$%i{default} for {red}capping a survivor{default}!", i_awardAbilityLanded)
+		}
+	}
+}
+
+//Charger
+static ChargerPummelStartEvent(Handle:hEvent, const String:name[], bool:dontBroadcast)
+{
+	if (g_bRoundLive)
+	{
+		new infected = GetClientOfUserId(GetEventInt(hEvent, "userid"))
+		
+		//Award amounts
+		int i_awardAbilityLanded = GetConVarInt(awardAbilityLanded)
+		
+		if (IsValidClient(infected))
+		{
+			GiveMoney(infected, i_awardAbilityLanded)
+			EarningsToConsole(infected, i_awardAbilityLanded, "Survivor Capped")
+			CPrintToChat(infected, "{olive}[ECO]{default} You earned: {green}$%i{default} for {red}capping a survivor{default}!", i_awardAbilityLanded)
+		}
+	}
+}
+
+//Hunter
+static HunterPounceEvent(Handle:hEvent, const String:name[], bool:dontBroadcast)
+{
+	if (g_bRoundLive)
+	{
+		new infected = GetClientOfUserId(GetEventInt(hEvent, "userid"))
+		
+		//Award amounts
+		int i_awardAbilityLanded = GetConVarInt(awardAbilityLanded)
+		
+		if (IsValidClient(infected))
+		{
+			GiveMoney(infected, i_awardAbilityLanded)
+			EarningsToConsole(infected, i_awardAbilityLanded, "Survivor Capped")
+			CPrintToChat(infected, "{olive}[ECO]{default} You earned: {green}$%i{default} for {red}capping a survivor{default}!", i_awardAbilityLanded)
+		}
+	}
+}
+
+//Boomer
+static BoomerLandedEvent(Handle:hEvent, const String:name[], bool:dontBroadcast)
+{
+	if (g_bRoundLive)
+	{
+		new infected = GetClientOfUserId(GetEventInt(hEvent, "attacker"))
+		
+		//Award amounts
+		int i_awardAbilityLanded = GetConVarInt(awardAbilityLanded)
+		
+		if (IsValidClient(infected))
+		{
+			GiveMoney(infected, i_awardAbilityLanded)
+			EarningsToConsole(infected, i_awardAbilityLanded, "Survivor Capped")
+			CPrintToChat(infected, "{olive}[ECO]{default} You earned: {green}$%i{default} for {red}booming a survivor{default}!", i_awardAbilityLanded)
+		}
+	}
+}
+
+//Skilled abilities: high pounces (15 damage or more), quad booms, quad charge, triple/quad punch (maybe double too), capping victim witch attacks, tri/quad cap landing
+
+//Fall damage from infected
+static PlayerFalldamageEvent(Handle:hEvent, const String:name[], bool:dontBroadcast)
+{
+	if (g_bRoundLive)
+	{
+		new victim = GetClientOfUserId(GetEventInt(hEvent, "userid"))
+		new causer = GetClientOfUserId(GetEventInt(hEvent, "causer"))
+		new damage = GetEventInt(hEvent, "damage")
+		
+		//Award amounts
+		int i_awardSkilledAbilityLanded = GetConVarInt(awardSkilledAbilityLanded)
+		
+		if (damage > 40)
+		{
+			if (GetClientTeam(victim) == teamSurvivor)
+			{
+				if (IsValidClient(causer))
+				{
+					if (GetClientTeam(causer) == teamInfected)
+					{
+						GiveMoney(causer, i_awardSkilledAbilityLanded)
+						EarningsToConsole(causer, i_awardSkilledAbilityLanded, "High Fall Damage")
+						CPrintToChat(causer, "{olive}[ECO]{default} You earned: {green}$%i{default} for {red}inflicting fall damage{default}!", i_awardSkilledAbilityLanded)
+					}
+				}
+			}
+		}
+	}
+}
+
+//Ledge hangs from infected
+static PlayerLedgeGrabEvent(Handle:hEvent, const String:name[], bool:dontBroadcast)
+{
+	if (g_bRoundLive)
+	{
+		new victim = GetClientOfUserId(GetEventInt(hEvent, "userid"))
+		new causer = GetClientOfUserId(GetEventInt(hEvent, "causer"))
+		
+		//Award amounts
+		int i_awardSkilledAbilityLanded = GetConVarInt(awardSkilledAbilityLanded)
+		
+		if (GetClientTeam(victim) == teamSurvivor)
+		{
+			if (IsValidClient(causer))
+			{
+				if (GetClientTeam(causer) == teamInfected)
+				{
+					GiveMoney(causer, i_awardSkilledAbilityLanded)
+					EarningsToConsole(causer, i_awardSkilledAbilityLanded, "Ledge Hang")
+					CPrintToChat(causer, "{olive}[ECO]{default} You earned: {green}$%i{default} for {red}ledge hanging a survivor{default}!", i_awardSkilledAbilityLanded)
+				}
+			}
+		}
+	}
+}
+
+/*
+	MONEY FUNCTIONS
+*/
+//Returns the current money a client has
 stock int GetMoney(client)
 {
 	int index = GetClientIndex(client)
@@ -509,6 +1230,75 @@ stock int GetMoney(client)
 	return -1;
 }
 
+//Award money to an entire team
+static AwardTeam(team, int amount, const char[] reason = "[Unspecified]")
+{
+	for (new i = 1; i <= MaxClients; i++)
+	{
+		if (IsValidClient(i))
+		{
+			if (GetClientTeam(i) == team)
+			{
+				GiveMoney(i, amount)
+				EarningsToConsole(i, amount, reason)
+			}
+		}
+	}
+}
+
+//Print total earnings for team
+static PrintEarningsTeam(team, int amount, int reason = 0, int isSecondHalf = 0, int lossCount = 0)
+{
+	for (new i = 1; i <= MaxClients; i++)
+	{
+		if (IsValidClient(i))
+		{
+			if (GetClientTeam(i) == team)
+			{
+				switch(reason)
+				{
+					//Generic round end
+					case 0:
+					{
+						if (isSecondHalf == 1)
+						{
+							if (lossCount == 0)
+							{
+								CPrintToChat(i, "{olive}[ECO]{default} Your team earned: {green}$%i{default} for {blue}winning{default} this round!", amount)
+							}
+							else
+							{
+								CPrintToChat(i, "{olive}[ECO]{default} Your team earned: {green}$%i{default} for {red}losing{default} this round!", amount)
+							}
+						}
+						else
+						{
+							CPrintToChat(i, "{olive}[ECO]{default} Your team earned: {green}$%i{default} for this round!", amount)
+						}
+					}
+					//Killed tank
+					case 1:
+					{
+						CPrintToChat(i, "{olive}[ECO]{default} Your team earned: {green}$%i{default} for {blue}killing the tank{default}!", amount)
+					}
+					//Survivor died (unknown killer/self inflicted)
+					case 2:
+					{
+						CPrintToChat(i, "{olive}[ECO]{default} Your team earned: {green}$%i{default} for {red}a survivor dying{default}!", amount)
+					}
+				}
+			}
+		}
+	}
+}
+
+//Print to console when money is earned
+static EarningsToConsole(client, int amount, const char[] reason = "[Unspecified]")
+{
+	PrintToConsole(client, "\x03Earned: $%i for: %s", amount, reason)
+}
+
+//Gives money to a client
 static GiveMoney(client, int amount)
 {
 	int index = GetClientIndex(client)
@@ -531,6 +1321,7 @@ static GiveMoney(client, int amount)
 	
 }
 
+//Spends a client's money
 static SpendMoney(client, int amount)
 {
 	int index = GetClientIndex(client)
@@ -552,30 +1343,13 @@ static SpendMoney(client, int amount)
 	
 }
 
-static bool IsValidClient(int client)
-{
-	return (1 <= client <= MaxClients && IsClientInGame(client) && !IsClientSourceTV(client) && !IsFakeClient(client));
-}
-
-static int GetClientIndex(int client)
-{
-	if (IsValidClient(client))
-	{
-		char steamID[64]
-		GetClientAuthId(client, AuthId_Steam2, steamID, sizeof(steamID))
-		new index = FindStringInArray(g_steamIDs,steamID)
-		return index;
-	}
-	return -1;
-}
-
 /*
 	BUY MENUS
 */
 //Draw buy menu footer
 static BuyMenuDrawMoney(client, param2)
 {
-	char buffer[255]
+	char buffer[32]
 	int money = GetMoney(client)
 	Format(buffer, sizeof(buffer), "Your Money: $%i", money)
 	
@@ -593,7 +1367,7 @@ static OpenBuyMenu(int client)
 {
 	if (g_bCanBuy)
 	{
-		if (GetClientTeam(client) == 2)
+		if (GetClientTeam(client) == teamSurvivor)
 		{
 			Menu menu = new Menu(BuyMenuHandler, MenuAction_Display|MenuAction_Select|MenuAction_Cancel|MenuAction_End)
 			menu.SetTitle("%s", "FailzzMod Buy Menu", LANG_SERVER)
@@ -613,8 +1387,6 @@ static OpenBuyMenu(int client)
 		else
 		{
 			InvalidBuyMessage(client, 2)
-			//BuyMenuDrawMoney(client, param2)
-			//Make a separate money only menu
 		}
 	}
 	else
@@ -692,24 +1464,31 @@ static OpenMenu_Shotguns(int client)
 {
 	if (g_bCanBuy)
 	{
-		Menu menu = new Menu(BuyMenuHandler_Shotguns, MenuAction_Display|MenuAction_Select|MenuAction_Cancel|MenuAction_End)
-		menu.SetTitle("%s", "Buy: Shotguns", LANG_SERVER)
-		
-		//Generate weapon strings
-		new price1 = GetConVarInt(priceShotgunPump);	char option1[255]; Format(option1, sizeof(option1), "Remmington Pump ($%i)", price1)
-		new price2 = GetConVarInt(priceShotgunChrome);	char option2[255]; Format(option2, sizeof(option2), "Chrome Pump ($%i)", price2)
-		new price3 = GetConVarInt(priceShotgunAuto);	char option3[255]; Format(option3, sizeof(option3), "M4 Tactical Auto ($%i)", price3)
-		new price4 = GetConVarInt(priceShotgunSpas);	char option4[255]; Format(option4, sizeof(option4), "SPAS Combat Auto ($%i)", price4)
-		
-		//Add options to menu
-		menu.AddItem(BUY_SHOTGUN_PUMP, option1)
-		menu.AddItem(BUY_SHOTGUN_CHROME, option2)
-		menu.AddItem(BUY_SHOTGUN_AUTO, option3)
-		menu.AddItem(BUY_SHOTGUN_SPAS, option4)
-		
-		menu.ExitButton = true
-		menu.ExitBackButton = true
-		menu.Display(client, MENU_TIME_FOREVER)
+		if (GetClientTeam(client) == teamSurvivor)
+		{
+			Menu menu = new Menu(BuyMenuHandler_Shotguns, MenuAction_Display|MenuAction_Select|MenuAction_Cancel|MenuAction_End)
+			menu.SetTitle("%s", "Buy: Shotguns", LANG_SERVER)
+			
+			//Generate weapon strings
+			new price1 = GetConVarInt(priceShotgunPump);	char option1[255]; Format(option1, sizeof(option1), "Remmington Pump ($%i)", price1)
+			new price2 = GetConVarInt(priceShotgunChrome);	char option2[255]; Format(option2, sizeof(option2), "Chrome Pump ($%i)", price2)
+			new price3 = GetConVarInt(priceShotgunAuto);	char option3[255]; Format(option3, sizeof(option3), "M4 Tactical Auto ($%i)", price3)
+			new price4 = GetConVarInt(priceShotgunSpas);	char option4[255]; Format(option4, sizeof(option4), "SPAS Combat Auto ($%i)", price4)
+			
+			//Add options to menu
+			menu.AddItem(BUY_SHOTGUN_PUMP, option1)
+			menu.AddItem(BUY_SHOTGUN_CHROME, option2)
+			menu.AddItem(BUY_SHOTGUN_AUTO, option3)
+			menu.AddItem(BUY_SHOTGUN_SPAS, option4)
+			
+			menu.ExitButton = true
+			menu.ExitBackButton = true
+			menu.Display(client, MENU_TIME_FOREVER)
+		}
+		else
+		{
+			InvalidBuyMessage(client, 2)
+		}
 	}
 	else
 	{
@@ -775,30 +1554,37 @@ static OpenMenu_Automatic(int client)
 {
 	if (g_bCanBuy)
 	{
-		Menu menu = new Menu(BuyMenuHandler_Automatic, MenuAction_Display|MenuAction_Select|MenuAction_Cancel|MenuAction_End)
-		menu.SetTitle("%s", "Buy: Automatic Weapons", LANG_SERVER)
-		
-		//Generate weapon strings
-		new price1 = GetConVarInt(priceUzi);			char option1[255]; Format(option1, sizeof(option1), "SMG ($%i)", price1)
-		new price2 = GetConVarInt(priceUziSilenced);	char option2[255]; Format(option2, sizeof(option2), "Silenced Mac-10 ($%i)", price2)
-		new price3 = GetConVarInt(priceUziMP5);			char option3[255]; Format(option3, sizeof(option3), "H&K MP5 ($%i)", price3)
-		new price4 = GetConVarInt(priceRifleDesert);	char option4[255]; Format(option4, sizeof(option4), "SCAR Desert Rifle ($%i)", price4)
-		new price5 = GetConVarInt(priceRifleM16);		char option5[255]; Format(option5, sizeof(option5), "M16 Assault Rifle ($%i)", price5)
-		new price6 = GetConVarInt(priceRifleAK47);		char option6[255]; Format(option6, sizeof(option6), "AK-47 ($%i)", price6)
-		new price7 = GetConVarInt(priceRifleSG552);		char option7[255]; Format(option7, sizeof(option7), "SG 552 ($%i)", price7)
-		
-		//Add options to menu
-		menu.AddItem(BUY_UZI, option1)
-		menu.AddItem(BUY_UZI_SILENCED, option2)
-		menu.AddItem(BUY_UZI_MP5, option3)
-		menu.AddItem(BUY_RIFLE_DESERT, option4)
-		menu.AddItem(BUY_RIFLE_M16, option5)
-		menu.AddItem(BUY_RIFLE_AK47, option6)
-		menu.AddItem(BUY_RIFLE_SG552, option7)
-		
-		menu.ExitButton = true
-		menu.ExitBackButton = true
-		menu.Display(client, MENU_TIME_FOREVER)
+		if (GetClientTeam(client) == teamSurvivor)
+		{
+			Menu menu = new Menu(BuyMenuHandler_Automatic, MenuAction_Display|MenuAction_Select|MenuAction_Cancel|MenuAction_End)
+			menu.SetTitle("%s", "Buy: Automatic Weapons", LANG_SERVER)
+			
+			//Generate weapon strings
+			new price1 = GetConVarInt(priceUzi);			char option1[255]; Format(option1, sizeof(option1), "SMG ($%i)", price1)
+			new price2 = GetConVarInt(priceUziSilenced);	char option2[255]; Format(option2, sizeof(option2), "Silenced Mac-10 ($%i)", price2)
+			new price3 = GetConVarInt(priceUziMP5);			char option3[255]; Format(option3, sizeof(option3), "H&K MP5 ($%i)", price3)
+			new price4 = GetConVarInt(priceRifleDesert);	char option4[255]; Format(option4, sizeof(option4), "SCAR Desert Rifle ($%i)", price4)
+			new price5 = GetConVarInt(priceRifleM16);		char option5[255]; Format(option5, sizeof(option5), "M16 Assault Rifle ($%i)", price5)
+			new price6 = GetConVarInt(priceRifleAK47);		char option6[255]; Format(option6, sizeof(option6), "AK-47 ($%i)", price6)
+			new price7 = GetConVarInt(priceRifleSG552);		char option7[255]; Format(option7, sizeof(option7), "SG 552 ($%i)", price7)
+			
+			//Add options to menu
+			menu.AddItem(BUY_UZI, option1)
+			menu.AddItem(BUY_UZI_SILENCED, option2)
+			menu.AddItem(BUY_UZI_MP5, option3)
+			menu.AddItem(BUY_RIFLE_DESERT, option4)
+			menu.AddItem(BUY_RIFLE_M16, option5)
+			menu.AddItem(BUY_RIFLE_AK47, option6)
+			menu.AddItem(BUY_RIFLE_SG552, option7)
+			
+			menu.ExitButton = true
+			menu.ExitBackButton = true
+			menu.Display(client, MENU_TIME_FOREVER)
+		}
+		else
+		{
+			InvalidBuyMessage(client, 2)
+		}
 	}
 	else
 	{
@@ -879,24 +1665,31 @@ static OpenMenu_Snipers(int client)
 {
 	if (g_bCanBuy)
 	{
-		Menu menu = new Menu(BuyMenuHandler_Snipers, MenuAction_Display|MenuAction_Select|MenuAction_Cancel|MenuAction_End)
-		menu.SetTitle("%s", "Buy: Sniper Rifles", LANG_SERVER)
-		
-		//Generate weapon strings
-		new price1 = GetConVarInt(priceSniperScout);	char option1[255]; Format(option1, sizeof(option1), "Steyr Scout ($%i)", price1)
-		new price2 = GetConVarInt(priceSniperHunting);	char option2[255]; Format(option2, sizeof(option2), "Hunting Rifle ($%i)", price2)
-		new price3 = GetConVarInt(priceSniperMilitary);	char option3[255]; Format(option3, sizeof(option3), "Military Rifle ($%i)", price3)
-		new price4 = GetConVarInt(priceSniperAWP);		char option4[255]; Format(option4, sizeof(option4), "AWP ($%i)", price4)
-		
-		//Add options to menu
-		menu.AddItem(BUY_SNIPER_SCOUT, option1)
-		menu.AddItem(BUY_SNIPER_HUNTING, option2)
-		menu.AddItem(BUY_SNIPER_MILITARY, option3)
-		menu.AddItem(BUY_SNIPER_AWP, option4)
-		
-		menu.ExitButton = true
-		menu.ExitBackButton = true
-		menu.Display(client, MENU_TIME_FOREVER)
+		if (GetClientTeam(client) == teamSurvivor)
+		{
+			Menu menu = new Menu(BuyMenuHandler_Snipers, MenuAction_Display|MenuAction_Select|MenuAction_Cancel|MenuAction_End)
+			menu.SetTitle("%s", "Buy: Sniper Rifles", LANG_SERVER)
+			
+			//Generate weapon strings
+			new price1 = GetConVarInt(priceSniperScout);	char option1[255]; Format(option1, sizeof(option1), "Steyr Scout ($%i)", price1)
+			new price2 = GetConVarInt(priceSniperHunting);	char option2[255]; Format(option2, sizeof(option2), "Hunting Rifle ($%i)", price2)
+			new price3 = GetConVarInt(priceSniperMilitary);	char option3[255]; Format(option3, sizeof(option3), "Military Rifle ($%i)", price3)
+			new price4 = GetConVarInt(priceSniperAWP);		char option4[255]; Format(option4, sizeof(option4), "AWP ($%i)", price4)
+			
+			//Add options to menu
+			menu.AddItem(BUY_SNIPER_SCOUT, option1)
+			menu.AddItem(BUY_SNIPER_HUNTING, option2)
+			menu.AddItem(BUY_SNIPER_MILITARY, option3)
+			menu.AddItem(BUY_SNIPER_AWP, option4)
+			
+			menu.ExitButton = true
+			menu.ExitBackButton = true
+			menu.Display(client, MENU_TIME_FOREVER)
+		}
+		else
+		{
+			InvalidBuyMessage(client, 2)
+		}
 	}
 	else
 	{
@@ -962,22 +1755,29 @@ static OpenMenu_Heavy(int client)
 {
 	if (g_bCanBuy)
 	{
-		Menu menu = new Menu(BuyMenuHandler_Heavy, MenuAction_Display|MenuAction_Select|MenuAction_Cancel|MenuAction_End)
-		menu.SetTitle("%s", "Buy: Heavy Weapons", LANG_SERVER)
-		
-		//Generate weapon strings
-		new price1 = GetConVarInt(priceM60);				char option1[255]; Format(option1, sizeof(option1), "M60 Machine Gun ($%i)", price1)
-		new price2 = GetConVarInt(priceGrenadeLauncher);	char option2[255]; Format(option2, sizeof(option2), "Grenade Launcher ($%i)", price2)
-		new price3 = GetConVarInt(priceChainsaw);			char option3[255]; Format(option3, sizeof(option3), "Chainsaw ($%i)", price3)
-		
-		//Add options to menu
-		menu.AddItem(BUY_M60, option1)
-		menu.AddItem(BUY_GRENADELAUNCHER, option2)
-		menu.AddItem(BUY_CHAINSAW, option3)
-		
-		menu.ExitButton = true
-		menu.ExitBackButton = true
-		menu.Display(client, MENU_TIME_FOREVER)
+		if (GetClientTeam(client) == teamSurvivor)
+		{
+			Menu menu = new Menu(BuyMenuHandler_Heavy, MenuAction_Display|MenuAction_Select|MenuAction_Cancel|MenuAction_End)
+			menu.SetTitle("%s", "Buy: Heavy Weapons", LANG_SERVER)
+			
+			//Generate weapon strings
+			new price1 = GetConVarInt(priceM60);				char option1[255]; Format(option1, sizeof(option1), "M60 Machine Gun ($%i)", price1)
+			new price2 = GetConVarInt(priceGrenadeLauncher);	char option2[255]; Format(option2, sizeof(option2), "Grenade Launcher ($%i)", price2)
+			new price3 = GetConVarInt(priceChainsaw);			char option3[255]; Format(option3, sizeof(option3), "Chainsaw ($%i)", price3)
+			
+			//Add options to menu
+			menu.AddItem(BUY_M60, option1)
+			menu.AddItem(BUY_GRENADELAUNCHER, option2)
+			menu.AddItem(BUY_CHAINSAW, option3)
+			
+			menu.ExitButton = true
+			menu.ExitBackButton = true
+			menu.Display(client, MENU_TIME_FOREVER)
+		}
+		else
+		{
+			InvalidBuyMessage(client, 2)
+		}
 	}
 	else
 	{
@@ -1038,24 +1838,31 @@ static OpenMenu_Secondary(int client)
 {
 	if (g_bCanBuy)
 	{
-		Menu menu = new Menu(BuyMenuHandler_Secondary, MenuAction_Display|MenuAction_Select|MenuAction_Cancel|MenuAction_End)
-		menu.SetTitle("%s", "Buy: Secondary Weapons", LANG_SERVER)
-		
-		//Generate weapon strings
-		new price1 = GetConVarInt(pricePistol);		char option1[255]; Format(option1, sizeof(option1), "Pistol ($%i)", price1)
-		new price2 = GetConVarInt(priceMagnum);		char option2[255]; Format(option2, sizeof(option2), "Desert Eagle ($%i)", price2)
-		new price3 = GetConVarInt(priceMeleeBlunt);	char option3[255]; Format(option3, sizeof(option3), "Blunt Melee Weapons ($%i)", price3)
-		new price4 = GetConVarInt(priceMeleeSharp);	char option4[255]; Format(option4, sizeof(option4), "Sharp Melee Weapons ($%i)", price4)
-		
-		//Add options to menu
-		menu.AddItem(BUY_PISTOL, option1)
-		menu.AddItem(BUY_PISTOL_MAGNUM, option2)
-		menu.AddItem(CHOICE_MELEE_BLUNT, option3)
-		menu.AddItem(CHOICE_MELEE_SHARP, option4)
-		
-		menu.ExitButton = true
-		menu.ExitBackButton = true
-		menu.Display(client, MENU_TIME_FOREVER)
+		if (GetClientTeam(client) == teamSurvivor)
+		{
+			Menu menu = new Menu(BuyMenuHandler_Secondary, MenuAction_Display|MenuAction_Select|MenuAction_Cancel|MenuAction_End)
+			menu.SetTitle("%s", "Buy: Secondary Weapons", LANG_SERVER)
+			
+			//Generate weapon strings
+			new price1 = GetConVarInt(pricePistol);		char option1[255]; Format(option1, sizeof(option1), "Pistol ($%i)", price1)
+			new price2 = GetConVarInt(priceMagnum);		char option2[255]; Format(option2, sizeof(option2), "Desert Eagle ($%i)", price2)
+			new price3 = GetConVarInt(priceMeleeBlunt);	char option3[255]; Format(option3, sizeof(option3), "Blunt Melee Weapons ($%i)", price3)
+			new price4 = GetConVarInt(priceMeleeSharp);	char option4[255]; Format(option4, sizeof(option4), "Sharp Melee Weapons ($%i)", price4)
+			
+			//Add options to menu
+			menu.AddItem(BUY_PISTOL, option1)
+			menu.AddItem(BUY_PISTOL_MAGNUM, option2)
+			menu.AddItem(CHOICE_MELEE_BLUNT, option3)
+			menu.AddItem(CHOICE_MELEE_SHARP, option4)
+			
+			menu.ExitButton = true
+			menu.ExitBackButton = true
+			menu.Display(client, MENU_TIME_FOREVER)
+		}
+		else
+		{
+			InvalidBuyMessage(client, 2)
+		}
 	}
 	else
 	{
@@ -1119,55 +1926,62 @@ static OpenMenu_Blunt(int client)
 {
 	if (g_bCanBuy)
 	{
-		Menu menu = new Menu(BuyMenuHandler_Blunt, MenuAction_Display|MenuAction_Select|MenuAction_Cancel|MenuAction_End)
-		menu.SetTitle("%s", "Buy: Blunt Melee Weapons", LANG_SERVER)
-		
-		//Generate weapon strings
-		new price1 = GetConVarInt(priceMeleeBlunt)
-		char option1[255]; Format(option1, sizeof(option1), "Baseball Bat ($%i)", price1)
-		char option2[255]; Format(option2, sizeof(option2), "Cricket Bat ($%i)", price1)
-		char option3[255]; Format(option3, sizeof(option3), "Electric Guitar ($%i)", price1)
-		char option4[255]; Format(option4, sizeof(option4), "Frying Pan ($%i)", price1)
-		char option5[255]; Format(option5, sizeof(option5), "Golfclub ($%i)", price1)
-		char option6[255]; Format(option6, sizeof(option6), "Shovel ($%i)", price1)
-		char option7[255]; Format(option7, sizeof(option7), "Tonfa ($%i)", price1)
-		
-		//Add options to menu (if valid spawns for this map)
-		for(new i = 0; i < g_iValidMeleeCount; i++)
+		if (GetClientTeam(client) == teamSurvivor)
 		{
-			if (StrEqual(g_sValidMelees[i], "baseball_bat", false) == true)
+			Menu menu = new Menu(BuyMenuHandler_Blunt, MenuAction_Display|MenuAction_Select|MenuAction_Cancel|MenuAction_End)
+			menu.SetTitle("%s", "Buy: Blunt Melee Weapons", LANG_SERVER)
+			
+			//Generate weapon strings
+			new price1 = GetConVarInt(priceMeleeBlunt)
+			char option1[255]; Format(option1, sizeof(option1), "Baseball Bat ($%i)", price1)
+			char option2[255]; Format(option2, sizeof(option2), "Cricket Bat ($%i)", price1)
+			char option3[255]; Format(option3, sizeof(option3), "Electric Guitar ($%i)", price1)
+			char option4[255]; Format(option4, sizeof(option4), "Frying Pan ($%i)", price1)
+			char option5[255]; Format(option5, sizeof(option5), "Golfclub ($%i)", price1)
+			char option6[255]; Format(option6, sizeof(option6), "Shovel ($%i)", price1)
+			char option7[255]; Format(option7, sizeof(option7), "Tonfa ($%i)", price1)
+			
+			//Add options to menu (if valid spawns for this map)
+			for(new i = 0; i < g_iValidMeleeCount; i++)
 			{
-				menu.AddItem(BUY_BASEBALLBAT, option1)
+				if (StrEqual(g_sValidMelees[i], "baseball_bat", false) == true)
+				{
+					menu.AddItem(BUY_BASEBALLBAT, option1)
+				}
+				else if (StrEqual(g_sValidMelees[i], "cricket_bat", false) == true)
+				{
+					menu.AddItem(BUY_CRICKETBAT, option2)
+				}
+				else if (StrEqual(g_sValidMelees[i], "electric_guitar", false) == true)
+				{
+					menu.AddItem(BUY_GUITAR, option3)
+				}
+				else if (StrEqual(g_sValidMelees[i], "frying_pan", false) == true)
+				{
+					menu.AddItem(BUY_FRYINGPAN, option4)
+				}
+				else if (StrEqual(g_sValidMelees[i], "golfclub", false) == true)
+				{
+					menu.AddItem(BUY_GOLFCLUB, option5)
+				}
+				else if (StrEqual(g_sValidMelees[i], "shovel", false) == true)
+				{
+					menu.AddItem(BUY_SHOVEL, option6)
+				}
+				else if (StrEqual(g_sValidMelees[i], "tonfa", false) == true)
+				{
+					menu.AddItem(BUY_TONFA, option7)
+				}
 			}
-			else if (StrEqual(g_sValidMelees[i], "cricket_bat", false) == true)
-			{
-				menu.AddItem(BUY_CRICKETBAT, option2)
-			}
-			else if (StrEqual(g_sValidMelees[i], "electric_guitar", false) == true)
-			{
-				menu.AddItem(BUY_GUITAR, option3)
-			}
-			else if (StrEqual(g_sValidMelees[i], "frying_pan", false) == true)
-			{
-				menu.AddItem(BUY_FRYINGPAN, option4)
-			}
-			else if (StrEqual(g_sValidMelees[i], "golfclub", false) == true)
-			{
-				menu.AddItem(BUY_GOLFCLUB, option5)
-			}
-			else if (StrEqual(g_sValidMelees[i], "shovel", false) == true)
-			{
-				menu.AddItem(BUY_SHOVEL, option6)
-			}
-			else if (StrEqual(g_sValidMelees[i], "tonfa", false) == true)
-			{
-				menu.AddItem(BUY_TONFA, option7)
-			}
+			
+			menu.ExitButton = true
+			menu.ExitBackButton = true
+			menu.Display(client, MENU_TIME_FOREVER)
 		}
-		
-		menu.ExitButton = true
-		menu.ExitBackButton = true
-		menu.Display(client, MENU_TIME_FOREVER)
+		else
+		{
+			InvalidBuyMessage(client, 2)
+		}
 	}
 	else
 	{
@@ -1248,51 +2062,58 @@ static OpenMenu_Sharp(int client)
 {
 	if (g_bCanBuy)
 	{
-		Menu menu = new Menu(BuyMenuHandler_Sharp, MenuAction_Display|MenuAction_Select|MenuAction_Cancel|MenuAction_End)
-		menu.SetTitle("%s", "Buy: Sharp Melee Weapons", LANG_SERVER)
-		
-		//Generate weapon strings
-		new price1 = GetConVarInt(priceMeleeSharp)
-		char option1[255]; Format(option1, sizeof(option1), "Crowbar ($%i)", price1)
-		char option2[255]; Format(option2, sizeof(option2), "Fire Axe ($%i)", price1)
-		char option3[255]; Format(option3, sizeof(option3), "Katana ($%i)", price1)
-		char option4[255]; Format(option4, sizeof(option4), "Knife ($%i)", price1)
-		char option5[255]; Format(option5, sizeof(option5), "Machete ($%i)", price1)
-		char option6[255]; Format(option6, sizeof(option6), "Pitchfork ($%i)", price1)
-		
-		//Add options to menu
-				//Add options to menu (if valid spawns for this map)
-		for(new i = 0; i < g_iValidMeleeCount; i++)
+		if (GetClientTeam(client) == teamSurvivor)
 		{
-			if (StrEqual(g_sValidMelees[i], "crowbar", false) == true)
+			Menu menu = new Menu(BuyMenuHandler_Sharp, MenuAction_Display|MenuAction_Select|MenuAction_Cancel|MenuAction_End)
+			menu.SetTitle("%s", "Buy: Sharp Melee Weapons", LANG_SERVER)
+			
+			//Generate weapon strings
+			new price1 = GetConVarInt(priceMeleeSharp)
+			char option1[255]; Format(option1, sizeof(option1), "Crowbar ($%i)", price1)
+			char option2[255]; Format(option2, sizeof(option2), "Fire Axe ($%i)", price1)
+			char option3[255]; Format(option3, sizeof(option3), "Katana ($%i)", price1)
+			char option4[255]; Format(option4, sizeof(option4), "Knife ($%i)", price1)
+			char option5[255]; Format(option5, sizeof(option5), "Machete ($%i)", price1)
+			char option6[255]; Format(option6, sizeof(option6), "Pitchfork ($%i)", price1)
+			
+			//Add options to menu
+					//Add options to menu (if valid spawns for this map)
+			for(new i = 0; i < g_iValidMeleeCount; i++)
 			{
-				menu.AddItem(BUY_CROWBAR, option1)
+				if (StrEqual(g_sValidMelees[i], "crowbar", false) == true)
+				{
+					menu.AddItem(BUY_CROWBAR, option1)
+				}
+				else if (StrEqual(g_sValidMelees[i], "fireaxe", false) == true)
+				{
+					menu.AddItem(BUY_FIRAXE, option2)
+				}
+				else if (StrEqual(g_sValidMelees[i], "katana", false) == true)
+				{
+					menu.AddItem(BUY_KATANA, option3)
+				}
+				else if (StrEqual(g_sValidMelees[i], "knife", false) == true)
+				{
+					menu.AddItem(BUY_KNIFE, option4)
+				}
+				else if (StrEqual(g_sValidMelees[i], "machete", false) == true)
+				{
+					menu.AddItem(BUY_MACHETE, option5)
+				}
+				else if (StrEqual(g_sValidMelees[i], "pitchfork", false) == true)
+				{
+					menu.AddItem(BUY_PITCHFORK, option6)
+				}
 			}
-			else if (StrEqual(g_sValidMelees[i], "fireaxe", false) == true)
-			{
-				menu.AddItem(BUY_FIRAXE, option2)
-			}
-			else if (StrEqual(g_sValidMelees[i], "katana", false) == true)
-			{
-				menu.AddItem(BUY_KATANA, option3)
-			}
-			else if (StrEqual(g_sValidMelees[i], "knife", false) == true)
-			{
-				menu.AddItem(BUY_KNIFE, option4)
-			}
-			else if (StrEqual(g_sValidMelees[i], "machete", false) == true)
-			{
-				menu.AddItem(BUY_MACHETE, option5)
-			}
-			else if (StrEqual(g_sValidMelees[i], "pitchfork", false) == true)
-			{
-				menu.AddItem(BUY_PITCHFORK, option6)
-			}
+			
+			menu.ExitButton = true
+			menu.ExitBackButton = true
+			menu.Display(client, MENU_TIME_FOREVER)
 		}
-		
-		menu.ExitButton = true
-		menu.ExitBackButton = true
-		menu.Display(client, MENU_TIME_FOREVER)
+		else
+		{
+			InvalidBuyMessage(client, 2)
+		}
 	}
 	else
 	{
@@ -1368,22 +2189,29 @@ static OpenMenu_Throwable(int client)
 {
 	if (g_bCanBuy)
 	{
-		Menu menu = new Menu(BuyMenuHandler_Throwable, MenuAction_Display|MenuAction_Select|MenuAction_Cancel|MenuAction_End)
-		menu.SetTitle("%s", "Buy: Throwables", LANG_SERVER)
-		
-		//Generate weapon strings
-		new price1 = GetConVarInt(priceMolotov);	char option1[255]; Format(option1, sizeof(option1), "Molotov ($%i)", price1)
-		new price2 = GetConVarInt(pricePipebomb);	char option2[255]; Format(option2, sizeof(option2), "Pipe Bomb ($%i)", price2)
-		new price3 = GetConVarInt(priceBilebomb);	char option3[255]; Format(option3, sizeof(option3), "Bile Bomb ($%i)", price3)
-		
-		//Add options to menu
-		menu.AddItem(BUY_MOLOTOV, option1)
-		menu.AddItem(BUY_PIPEBOMB, option2)
-		menu.AddItem(BUY_BILEBOMB, option3)
-		
-		menu.ExitButton = true
-		menu.ExitBackButton = true
-		menu.Display(client, MENU_TIME_FOREVER)
+		if (GetClientTeam(client) == teamSurvivor)
+		{
+			Menu menu = new Menu(BuyMenuHandler_Throwable, MenuAction_Display|MenuAction_Select|MenuAction_Cancel|MenuAction_End)
+			menu.SetTitle("%s", "Buy: Throwables", LANG_SERVER)
+			
+			//Generate weapon strings
+			new price1 = GetConVarInt(priceMolotov);	char option1[255]; Format(option1, sizeof(option1), "Molotov ($%i)", price1)
+			new price2 = GetConVarInt(pricePipebomb);	char option2[255]; Format(option2, sizeof(option2), "Pipe Bomb ($%i)", price2)
+			new price3 = GetConVarInt(priceBilebomb);	char option3[255]; Format(option3, sizeof(option3), "Bile Bomb ($%i)", price3)
+			
+			//Add options to menu
+			menu.AddItem(BUY_MOLOTOV, option1)
+			menu.AddItem(BUY_PIPEBOMB, option2)
+			menu.AddItem(BUY_BILEBOMB, option3)
+			
+			menu.ExitButton = true
+			menu.ExitBackButton = true
+			menu.Display(client, MENU_TIME_FOREVER)
+		}
+		else
+		{
+			InvalidBuyMessage(client, 2)
+		}
 	}
 	else
 	{
@@ -1444,24 +2272,31 @@ static OpenMenu_Healing(int client)
 {
 	if (g_bCanBuy)
 	{
-		Menu menu = new Menu(BuyMenuHandler_Healing, MenuAction_Display|MenuAction_Select|MenuAction_Cancel|MenuAction_End)
-		menu.SetTitle("%s", "Buy: Healing Items", LANG_SERVER)
-		
-		//Generate weapon strings
-		new price1 = GetConVarInt(pricePainPills);		char option1[255]; Format(option1, sizeof(option1), "Pain Pills ($%i)", price1)
-		new price2 = GetConVarInt(priceAdrenaline);		char option2[255]; Format(option2, sizeof(option2), "Adrenaline ($%i)", price2)
-		new price3 = GetConVarInt(priceMedkit);			char option3[255]; Format(option3, sizeof(option3), "First Aid Kit ($%i)", price3)
-		new price4 = GetConVarInt(priceDefibrillator);	char option4[255]; Format(option4, sizeof(option4), "Defibrillator ($%i)", price4)
-		
-		//Add options to menu
-		menu.AddItem(BUY_PAINPILLS, option1)
-		menu.AddItem(BUY_ADRENALINE, option2)
-		menu.AddItem(BUY_MEDKIT, option3)
-		menu.AddItem(BUY_DEFIB, option4)
-		
-		menu.ExitButton = true
-		menu.ExitBackButton = true
-		menu.Display(client, MENU_TIME_FOREVER)
+		if (GetClientTeam(client) == teamSurvivor)
+		{
+			Menu menu = new Menu(BuyMenuHandler_Healing, MenuAction_Display|MenuAction_Select|MenuAction_Cancel|MenuAction_End)
+			menu.SetTitle("%s", "Buy: Healing Items", LANG_SERVER)
+			
+			//Generate weapon strings
+			new price1 = GetConVarInt(pricePainPills);		char option1[255]; Format(option1, sizeof(option1), "Pain Pills ($%i)", price1)
+			new price2 = GetConVarInt(priceAdrenaline);		char option2[255]; Format(option2, sizeof(option2), "Adrenaline ($%i)", price2)
+			new price3 = GetConVarInt(priceMedkit);			char option3[255]; Format(option3, sizeof(option3), "First Aid Kit ($%i)", price3)
+			new price4 = GetConVarInt(priceDefibrillator);	char option4[255]; Format(option4, sizeof(option4), "Defibrillator ($%i)", price4)
+			
+			//Add options to menu
+			menu.AddItem(BUY_PAINPILLS, option1)
+			menu.AddItem(BUY_ADRENALINE, option2)
+			menu.AddItem(BUY_MEDKIT, option3)
+			menu.AddItem(BUY_DEFIB, option4)
+			
+			menu.ExitButton = true
+			menu.ExitBackButton = true
+			menu.Display(client, MENU_TIME_FOREVER)
+		}
+		else
+		{
+			InvalidBuyMessage(client, 2)
+		}
 	}
 	else
 	{
@@ -1541,6 +2376,7 @@ static MenuBuyItem(client, const char[] item, int itemType = 0)
 			{
 				SpendMoney(client, itemPrice)
 				GiveClientItem(client, item, itemType)
+				BuyConfirmationPrint(client, itemPrice, item)
 			}
 			else
 			{
@@ -1558,9 +2394,9 @@ static MenuBuyItem(client, const char[] item, int itemType = 0)
 static GiveClientItem(client, const char[] item, int itemType = 0)
 {
 	new flagsGive = GetCommandFlags("give")
-	new flagsUpgradeAdd = GetCommandFlags("upgrade_add")
+	//new flagsUpgradeAdd = GetCommandFlags("upgrade_add")
 	SetCommandFlags("give", flagsGive & ~FCVAR_CHEAT)
-	SetCommandFlags("upgrade_add", flagsGive & ~FCVAR_CHEAT)
+	//SetCommandFlags("upgrade_add", flagsGive & ~FCVAR_CHEAT)
 	
 	char buffer[255]
 	switch(itemType)
@@ -1576,15 +2412,15 @@ static GiveClientItem(client, const char[] item, int itemType = 0)
 			Format(buffer, sizeof(buffer), "give %s", item)
 		}
 		//Upgrades
-		case 2:
+		/*case 2:
 		{
 			Format(buffer, sizeof(buffer), "upgrade_add %s", item)
-		}
+		}*/
 	}
 	
 	FakeClientCommand(client, buffer)
 	SetCommandFlags("give", flagsGive|FCVAR_CHEAT)
-	SetCommandFlags("upgrade_add", flagsUpgradeAdd|FCVAR_CHEAT)
+	//SetCommandFlags("upgrade_add", flagsUpgradeAdd|FCVAR_CHEAT)
 }
 
 //Retrieve price of given item
@@ -1751,34 +2587,205 @@ static InvalidBuyMessage(client, int reason)
 	}
 }
 
+static BuyConfirmationPrint(client, amount, const char[] item)
+{
+	CPrintToChat(client, "{olive}[ECO]{default} Bought: {blue}%s{default} for: {green}$%i.", item, amount)
+}
+
+/*
+	ADMIN COMMANDS
+*/
+//Gives money to a player
+stock Action:GiveMoney_Cmd(int client, int args)
+{    
+	//Get arguments: Player name, money amount
+	char arg1[32]
+	char arg2[32]
+	GetCmdArg(1, arg1, sizeof(arg1))
+	GetCmdArg(2, arg2, sizeof(arg2))
+	
+	int target = FindTarget(client, arg1)
+	
+	//Inavlid player
+	if (target == -1 || !IsClientInGame(client) || IsClientSourceTV(client) || IsFakeClient(client))
+	{
+		CPrintToChat(client, "{olive}[ECO]{default} Invalid target.")
+		return Plugin_Handled;
+	}
+	
+	//Give money to player
+	int amount = StringToInt(arg2)
+	GiveMoney(target, amount)
+	
+	//Announce to server
+	char name[MAX_NAME_LENGTH]
+	GetClientName(target, name, sizeof(name))
+	CPrintToChatAll("{olive}[ECO]{default} {blue}%s{default} was given {green}$%i{default}.", name, amount)
+	
+	return Plugin_Handled;
+}
+
+//Removes money from a player
+stock Action:RemoveMoney_Cmd(int client, int args)
+{    
+	//Get arguments: Player name, money amount
+	char arg1[32]
+	char arg2[32]
+	GetCmdArg(1, arg1, sizeof(arg1))
+	GetCmdArg(2, arg2, sizeof(arg2))
+	
+	int target = FindTarget(client, arg1)
+	
+	//Inavlid player
+	if (target == -1 || !IsClientInGame(client) || IsClientSourceTV(client) || IsFakeClient(client))
+	{
+		CPrintToChat(client, "{olive}[ECO]{default} Invalid target.")
+		return Plugin_Handled;
+	}
+	
+	//Give money to player
+	int amount = StringToInt(arg2)
+	SpendMoney(target, amount)
+	
+	//Announce to server
+	char name[MAX_NAME_LENGTH]
+	GetClientName(target, name, sizeof(name))
+	CPrintToChatAll("{olive}[ECO]{default} {green}$%i{default} was removed from {blue}%s{default}.", name, amount)
+	
+	return Plugin_Handled;
+}
+
+/*
+	STOCKS
+*/
+//Test if client is valid
+stock bool IsValidClient(int client)
+{
+	return (1 <= client <= MaxClients && IsClientInGame(client) && !IsClientSourceTV(client) && !IsFakeClient(client));
+}
+
+stock bool IsValidClientOrBot(int client)
+{
+	return (1 <= client <= MaxClients && IsClientInGame(client) && !IsClientSourceTV(client));
+}
+
+//Test if client is a survivor bot
+stock bool IsSurvivorBot(int client)
+{
+	return (1 <= client <= MaxClients && IsClientInGame(client) && !IsClientSourceTV(client) && IsFakeClient(client) && GetClientTeam(client) == teamSurvivor);
+}
+
+//Return index of client within money array
+stock int GetClientIndex(int client)
+{
+	if (IsValidClient(client))
+	{
+		char steamID[64]
+		GetClientAuthId(client, AuthId_Steam2, steamID, sizeof(steamID))
+		new index = FindStringInArray(g_steamIDs,steamID)
+		return index;
+	}
+	return -1;
+}
+
+//Return if round is first or second half
+stock InSecondHalfOfRound()
+{
+	return GameRules_GetProp("m_bInSecondHalfOfRound");
+}
+
+//Return if teams are flipped
+stock AreTeamsFlipped()
+{
+	return GameRules_GetProp("m_bAreTeamsFlipped");
+}
+
+//How many survivors are currently alive
+stock GetUprightSurvivors()
+{
+	new aliveCount;
+	
+	for (new i = 1; i <= MaxClients; i++)
+	{
+		if (IsValidClient(i))
+		{
+			if (GetClientTeam(i) == teamSurvivor)
+			{
+				if (IsPlayerAlive(i) && !IsPlayerIncap(i) && !IsPlayerLedged(i))
+				{
+					aliveCount++
+				}
+			}
+		}
+	}
+	return aliveCount;
+}
+
+//Is client incapped
+stock bool:IsPlayerIncap(client)
+{
+	return bool:GetEntProp(client, Prop_Send, "m_isIncapacitated");
+}
+
+//Is client ledge hanging
+stock bool:IsPlayerLedged(client)
+{
+	return bool:(GetEntProp(client, Prop_Send, "m_isHangingFromLedge") | GetEntProp(client, Prop_Send, "m_isFallingFromLedge"));
+}
+
+//Returns temporary health value of client
+stock GetSurvivorTemporaryHealth(client)
+{
+	new temphp = RoundToCeil(GetEntPropFloat(client, Prop_Send, "m_healthBuffer") - ((GetGameTime() - GetEntPropFloat(client, Prop_Send, "m_healthBufferTime")) * GetConVarFloat(FindConVar("pain_pills_decay_rate")))) - 1;
+	return (temphp > 0 ? temphp : 0);
+}
+
+//Returns permanent health value of client
+stock GetSurvivorPermanentHealth(client)
+{
+	// Survivors always have minimum 1 permanent hp
+	// so that they don't faint in place just like that when all temp hp run out
+	// We'll use a workaround for the sake of fair calculations
+	// Edit 2: "Incapped HP" are stored in m_iHealth too; we heard you like workarounds, dawg, so we've added a workaround in a workaround
+	return GetEntProp(client, Prop_Send, "m_currentReviveCount") > 0 ? 0 : (GetEntProp(client, Prop_Send, "m_iHealth") > 0 ? GetEntProp(client, Prop_Send, "m_iHealth") : 0);
+}
+
+//Return how many distance points survivors have earned currently
+stock int GetVersusProgressDistance(int teamIndex)
+{
+	int distance = 0
+	for (int i = 0; i < 4; ++i)
+	{
+		distance += GameRules_GetProp("m_iVersusDistancePerSurvivor", _, i + (4 * teamIndex))
+	}
+	return distance;
+}
+
+
 /*
 NOTES:
-
 Ideas:
-way to drop any item/buy for your team
-money transfer system - lets you send money (in fixed amounts e.g. $500 etc) to a teammate
-maybe some kind of refund system for not needing to use an item when the round ends, maybe this could be an optional award given when reaching the saferoom (but by default no bonus would be awarded for saving your medkit etc)
+money transfer system - send money in fixed amounts to a teammate e.g. $500, $1000
 something to control ammo pile density (e.g. multiply density per map)
-interacting with ammo pile/pill cabinet can let you buy maybe? or maybe a custom buying point, but custom maps could be an issue
-detect campaign length using functions/mission file, option to have multiplier for shorter/longer than normal campaigns (maybe bonus applied to start money)
-weapon upgrade changes:
-	-fire ammo, some kind of nerf like reducing damage dealt, increasing reload time
-	-explosive ammo no longer stumbles
-	-laser does not give as much accuracy
-	-increase deploy time
-	-only 1 person can take upgrade from box
-weakest link "bank" money for scoring, or place wagers on winning
+interacting with ammo pile/pill cabinet can let you buy
+detect campaign length, option to have multiplier for shorter/longer than normal campaigns (maybe bonus applied to start money) - dont think this is really needed
 actually if you heal right before end of round u would get extra money - need to fix that - award extra money for having a medkit, but increase medkit price to compensate? or make the hp calculation count unused medkits
-reduce gl damage by a lot (around 100), + reduce tank damage. increase reload, 2 shots per clip
-
+using a medkit could forfeit the health bonus completely
 
 
 Todo:
-account for round resets (revert money/items back to what it was at start of round)
-functions to optionally remove item and weapon spawns - need something to allow ammo piles to spawn though, or replace weapons with ammo
-variables to enable/disable heavy weapons, upgrades, etc
-admin commands to set money
+account for round resets (revert money/items back to what it was at start of round), store amount of money at start of round
 pass item price handle through buy function directly instead of calling getitemprice
-autobuy for bots when buy time ends (always random t1 + pills, never spend more than the minimum a player could have/gained on last map)
 dont allow points to be gained or lost for things that happen once round is "finished" i.e. score board shows up
+play sound when round goes live
+add confirmation check if you already have an item in a slot you try to buy for
+change saferoom door locking to account for all cases, for now it is disabled
+print to client console when money is awarded with reason and amount
+command to print teams money
+move standard money to last round
+wait for all players to load in before starting the round
+extra starting money on 2/3 map campaigns
+plugin to make ammo density always at a minimum level
+cvars to control fall damage amount for award
+cvars to control dp damage amount for award
 */
