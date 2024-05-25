@@ -1,34 +1,36 @@
 //A re-write of devilesk's l4d2_ladder_editor plugin in vscript
 //https://github.com/devilesk/rl4d2l-plugins/blob/master/l4d2_ladder_editor.sp
 
-//TODO: Allow tab to actually enable edit mode when not in edit mode
+//TODO: Add function to automatically generate clips to smooth edges of ladders
+//Get front facing edges of ladder, spawn clip at the origin and rotate around that edge, add clip mins/maxs in only one direction so the point where the clip corner and ladder corner meets is easily aligned
+//Use normals to get direction of ladder
 
 printl("LADDER_EDITOR ENABLED\n");
 printl("_____________________\n");
 printl("COMMANDS:");
-printl("\t!edit          \t\tToggles edit mode");
-printl("\t!step <size>   \t\tChange edit mode step size");
-printl("\t!select        \t\tSelects the ladder you are currently aiming at");
-printl("\t!clone         \t\tCreates a copy of the selected ladder");
-printl("\t!move <x y z>  \t\tTeleports the selected ladder to the given coordinates");
-printl("\t!nudge <x y z> \t\tMoves the selected ladder from its current position by the given coordinates");
-printl("\t!rotate <x y z>\t\tRotates the selected ladder to the given angles");
-printl("\t!kill          \t\tDeletes the selected ladder");
-printl("\t!info          \t\tPrints info for the ladder you are currently aiming at in chat and console (including Stripper:Source code)");
-printl("\t!hud           \t\tToggles the info display / highlight on the currently selected ladder");
+printl("\t!edit\t\t\t\tToggles edit mode");
+printl("\t!step <size>\t\t\tChange edit mode step size");
+printl("\t!select\t\t\t\tSelects the ladder you are currently aiming at");
+printl("\t!clone\t\t\t\tCreates a copy of the selected ladder");
+printl("\t!move <x y z>\t\t\tTeleports the selected ladder to the given coordinates");
+printl("\t!nudge <x y z>\t\t\tMoves the selected ladder from its current position by the given coordinates");
+printl("\t!rotate <x y z>\t\t\tRotates the selected ladder to the given angles");
+printl("\t!kill\t\t\t\tDeletes the selected ladder");
+printl("\t!info\t\t\t\tPrints info for the ladder you are currently aiming at in chat and console (including Stripper:Source code)");
+printl("\t!hud\t\t\t\tToggles the info display / highlight on the currently selected ladder");
 printl("\t!precision <decimals>\t\tChanges the number of decimal places shown on the chat / HUD (console output will always have maximum precision)");
 printl("_____________________\n");
 printl("EDIT MODE CONTROLS:");
-printl("\tTAB (SCOREBOARD)      \t\tToggles edit mode");
-printl("\tMOUSE1 (PRIMARY ATK)  \t\tSelects the ladder you are currently aiming at");
+printl("\tTAB (SCOREBOARD)\t\tToggles edit mode");
+printl("\tMOUSE1 (PRIMARY ATK)\t\tSelects the ladder you are currently aiming at");
 printl("\tMOUSE2 (SECONDARY ATK)\t\tTeleports the selected ladder to the position you are currently aiming at");
-printl("\tSHIFT (WALK)          \t\tRotate the selected ladder by 90 degrees on the Y-axis");
-printl("\tA (LEFT)              \t\tNudge the selected ladder left on the X-axis by the step size");
-printl("\tD (RIGHT)             \t\tNudge the selected ladder right on the X-axis by the step size");
-printl("\tW (FORWARD)           \t\tNudge the selected ladder forward on the Y-axis by the step size");
-printl("\tS (BACK)              \t\tNudge the selected ladder back on the Y-axis by the step size");
-printl("\tE (USE)               \t\tNudge the selected ladder up on the Z-axis by the step size");
-printl("\tR (RELOAD)            \t\tNudge the selected ladder down on the Z-axis by the step size");
+printl("\tSHIFT (WALK)\t\t\tRotate the selected ladder by 90 degrees on the Y-axis");
+printl("\tA (LEFT)\t\t\tNudge the selected ladder left on the X-axis by the step size");
+printl("\tD (RIGHT)\t\t\tNudge the selected ladder right on the X-axis by the step size");
+printl("\tW (FORWARD)\t\t\tNudge the selected ladder forward on the Y-axis by the step size");
+printl("\tS (BACK)\t\t\tNudge the selected ladder back on the Y-axis by the step size");
+printl("\tE (USE)\t\t\t\tNudge the selected ladder up on the Z-axis by the step size");
+printl("\tR (RELOAD)\t\t\tNudge the selected ladder down on the Z-axis by the step size");
 
 MAXPLAYERS <- 32;
 ladderTable <- {};
@@ -37,6 +39,8 @@ bEditMode <- array(MAXPLAYERS + 1, false);
 fStepSize <- array(MAXPLAYERS + 1, 1.0);
 iSelectedLadder <- array(MAXPLAYERS + 1, -1);
 bHud <- array(MAXPLAYERS + 1, true);
+
+DebugDrawClear();
 
 //Commands
 function OnGameEvent_player_say(params)
@@ -207,7 +211,6 @@ function CommandClone(client, clientIndex)
 
 function CommandMove(client, clientIndex, argument)
 {
-    //TODO: Allow for missing arguments, e.g. !move x 50 = move x to 50, or !move y 10 = move y to 10
     if (argument.len() != 3)
     {
         ClientPrint(client, 3, "Usage: !move <x> <y> <z>");
@@ -229,7 +232,6 @@ function CommandMove(client, clientIndex, argument)
 
 function CommandNudge(client, clientIndex, argument)
 {
-    //TODO: Allow for missing arguments, e.g. !nudge x 50 = nudge x by 50, or !nudge y 10 = nudge y by 10
     if (argument.len() != 3)
     {
         ClientPrint(client, 3, "Usage: !nudge <x> <y> <z>");
@@ -251,7 +253,6 @@ function CommandNudge(client, clientIndex, argument)
 
 function CommandRotate(client, clientIndex, argument)
 {
-    //TODO: Allow for missing arguments, e.g. !rotate x 50 = rotate x to 50, or !rotate y 10 = rotate y to 10
     if (argument.len() != 3)
     {
         ClientPrint(client, 3, "Usage: !rotate <x> <y> <z>");
@@ -366,6 +367,11 @@ if (Entities.FindByName(null, "ladder_editor_edit_mode" ) == null)
     });
 }
 
+function OnGameEvent_player_spawn(params)
+{
+    RunEditMode(GetPlayerFromUserID(params.userid), params.userid);
+}
+
 function RunEditMode(client, clientIndex)
 {
     if (client.ValidateScriptScope())
@@ -385,11 +391,6 @@ function RunEditMode(client, clientIndex)
         {
             think["editMode"] <- bEditMode[think["clientIndex"]];
 
-            if (!think["editMode"])
-            {
-                return;
-            }
-
             if (think["client"].IsValid())
             {
                 think["buttonMask"] = think["client"].GetButtonMask();
@@ -397,6 +398,23 @@ function RunEditMode(client, clientIndex)
             else
             {
                 return;
+            }
+
+            //Tab (Released)
+            if (!(think["buttonMask"] & 65536) && think["in_score"])
+            {
+                think["in_score"] = false;
+                CommandEdit(think["client"], think["clientIndex"]);
+            }
+            //Tab (Pressed)
+            if (think["buttonMask"] & 65536 && !think["in_score"])
+            {
+                think["in_score"] = true;
+            }
+
+            if (!think["editMode"])
+            {
+                return 0.01;
             }
 
             /*IN_ATTACK = 1
@@ -413,7 +431,6 @@ function RunEditMode(client, clientIndex)
             IN_SCORE = 65536
             IN_SPEED = 131072
             IN_ZOOM = 524288*/
-            printl(think["buttonMask"])
 
             //Attack1 (Released)
             if (!(think["buttonMask"] & 1) && think["in_attack"])
@@ -453,18 +470,6 @@ function RunEditMode(client, clientIndex)
             if (think["buttonMask"] & 131072 && !think["in_speed"])
             {
                 think["in_speed"] = true;
-            }
-
-            //Tab (Released)
-            if (!(think["buttonMask"] & 65536) && think["in_score"])
-            {
-                think["in_score"] = false;
-                CommandEdit(think["client"], think["clientIndex"]);
-            }
-            //Tab (Pressed)
-            if (think["buttonMask"] & 65536 && !think["in_score"])
-            {
-                think["in_score"] = true;
             }
 
             //Left
@@ -576,10 +581,11 @@ function LadderEditorRedraw()
 
     DebugDrawClear();
 
+    //Highlight selected ladder
+    local precision = iFloatPrecision[clientIndex];
     local ladderInfo = GetLadderEntityInfo(entity);
     local mins = NetProps.GetPropVector(entity, "m_Collision.m_vecMins");
     local maxs = NetProps.GetPropVector(entity, "m_Collision.m_vecMaxs");
-    local precision = iFloatPrecision[clientIndex];
     local worldPosition = "(" + format("%." + precision + "f", ladderInfo[2].x) + ", " + format("%." + precision + "f", ladderInfo[2].y) + ", " + format("%." + precision + "f", ladderInfo[2].z) + ")";
     local origin = "(" + format("%." + precision + "f", ladderInfo[1].x) + ", " + format("%." + precision + "f", ladderInfo[1].y) + ", " + format("%." + precision + "f", ladderInfo[1].z) + ")";
     local normal = "(" + format("%." + precision + "f", ladderInfo[3].x) + ", " + format("%." + precision + "f", ladderInfo[3].y) + ", " + format("%." + precision + "f", ladderInfo[3].z) + ")";
@@ -588,6 +594,43 @@ function LadderEditorRedraw()
 
     DebugDrawBoxAngles(ladderInfo[1], mins, maxs, QAngle(ladderInfo[4].x, ladderInfo[4].y, ladderInfo[4].z), Vector(0, 128, 255), 40, 99999999);
     DebugDrawText(ladderInfo[1] + MathLadderOrigin(mins, maxs, ladderInfo[4]), drawText, false, 10);
+
+    //Highlight original ladder / other clones
+    local ladder = null;
+    local modelLadderInfo;
+    local ladderColor = Vector(0, 0, 0);
+    local textPrefix = "";
+    while ((ladder = Entities.FindByModel(ladder, ladderInfo[0])) != null)
+    {
+        modelLadderInfo = GetLadderEntityInfo(ladder);
+        if (modelLadderInfo == false || ladder == entity)
+        {
+            continue;
+        }
+
+        //Original ladder
+        if (modelLadderInfo[1].tostring() == Vector(0, 0, 0).tostring())
+        {
+            ladderColor = Vector(0, 255, 0);
+            textPrefix = "ORIGINAL LADDER\n";
+        }
+        else
+        {
+            ladderColor = Vector(0, 0, 255);
+             textPrefix = "CLONE\n";
+        }
+
+        mins = NetProps.GetPropVector(ladder, "m_Collision.m_vecMins");
+        maxs = NetProps.GetPropVector(ladder, "m_Collision.m_vecMaxs");
+        worldPosition = "(" + format("%." + precision + "f", modelLadderInfo[2].x) + ", " + format("%." + precision + "f", modelLadderInfo[2].y) + ", " + format("%." + precision + "f", modelLadderInfo[2].z) + ")";
+        origin = "(" + format("%." + precision + "f", modelLadderInfo[1].x) + ", " + format("%." + precision + "f", modelLadderInfo[1].y) + ", " + format("%." + precision + "f", modelLadderInfo[1].z) + ")";
+        normal = "(" + format("%." + precision + "f", modelLadderInfo[3].x) + ", " + format("%." + precision + "f", modelLadderInfo[3].y) + ", " + format("%." + precision + "f", modelLadderInfo[3].z) + ")";
+        angles = "(" + format("%." + precision + "f", modelLadderInfo[4].x) + ", " + format("%." + precision + "f", modelLadderInfo[4].y) + ", " + format("%." + precision + "f", modelLadderInfo[4].z) + ")";
+        drawText = "entity: " + ladder + "\nmodel: " + modelLadderInfo[0] + "\nworld position: " + worldPosition + "\norigin: " + origin + "\nangles: " + angles + "\nnormals: " + normal
+
+        DebugDrawBoxAngles(modelLadderInfo[1], mins, maxs, QAngle(modelLadderInfo[4].x, modelLadderInfo[4].y, modelLadderInfo[4].z), ladderColor, 40, 99999999);
+        DebugDrawText(modelLadderInfo[1] + MathLadderOrigin(mins, maxs, modelLadderInfo[4]), textPrefix + drawText, false, 10);
+    }
 }
 DrawLadderInfo();
 
@@ -642,6 +685,17 @@ function TraceView(client, returnEntity = true)
 //[modelName, origin, position, normal, angles]
 function GetLadderEntityInfo(entity)
 {
+    if (!entity.IsValid())
+    {
+        return false;
+    }
+
+    local classname = entity.GetClassname();
+    if (classname != "func_simpleladder")
+    {
+        return false;
+    }
+
     local modelName = entity.GetModelName();
     local origin = entity.GetOrigin();
     local mins = NetProps.GetPropVector(entity, "m_Collision.m_vecMins");
